@@ -32,25 +32,20 @@ eval $(opam env --switch=myswitch)
 dune build
 
 # need to install MNIST data
-mkdir ../otorch-test/data/
-cd ../otorch-test/data/
-URL=https://github.com/mrgloom/MNIST-dataset-in-different-formats/blob/master/data/Original%20dataset
-wget $URL/train-images.idx3-ubyte
-wget $URL/train-labels.idx1-ubyte
-wget $URL/t10k-images.idx3-ubyte
-wget $URL/t10k-labels.idx1-ubyte
-mv train-images.idx3-ubyte train-images-idx3-ubyte
-mv train-labels.idx1-ubyte train-labels-idx1-ubyte
-mv t10k-images.idx3-ubyte t10k-images-idx3-ubyte
-mv t10k-labels.idx1-ubyte t10k-labels-idx1-ubyte
+mkdir -p data
+cd data
+wget https://raw.githubusercontent.com/fgnt/mnist/master/t10k-images-idx3-ubyte.gz
+wget https://raw.githubusercontent.com/fgnt/mnist/master/t10k-labels-idx1-ubyte.gz
+wget https://raw.githubusercontent.com/fgnt/mnist/master/train-images-idx3-ubyte.gz
+wget https://raw.githubusercontent.com/fgnt/mnist/master/train-labels-idx1-ubyte.gz
 # wget http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz
 # wget http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz
 # wget http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz
 # wget http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz
-# gunzip train-images-idx3-ubyte.gz
-# gunzip train-labels-idx1-ubyte.gz
-# gunzip t10k-images-idx3-ubyte.gz
-# gunzip t10k-labels-idx1-ubyte.gz
+gunzip train-images-idx3-ubyte.gz
+gunzip train-labels-idx1-ubyte.gz
+gunzip t10k-images-idx3-ubyte.gz
+gunzip t10k-labels-idx1-ubyte.gz
 
 # for accessing remotely:  (e.g.)
 # sshfs -o allow_other,default_permissions ubuntu@104.171.203.63:/home/ubuntu/cortex/ /home/tlh24/remote/

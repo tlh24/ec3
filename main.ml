@@ -59,7 +59,7 @@ let () =
 	test_logo (); 
 	
 	
-	let mnistd = Mnist_helper.read_files ~prefix:"../otorch-test/data" () in
+	let mnistd = Mnist_helper.read_files ~prefix:"data/" () in
 	let mimg = Tensor.reshape mnistd.train_images 
 		~shape:[60000; 28; 28] in
 	(* need to pad to 30 x 30, one pixel on each side *)
