@@ -11,8 +11,9 @@ Inputs:
     y:      [B, 96]         int64    — y[:, :48] = prog A tokens,
                                        y[:, 48:] = prog B tokens (target)
 
-Sequence layout (full bidirectional attention, 1896 tokens total):
-    [ img_A×900 | img_B×900 | prog_A×48 | prog_B_query×48 ]
+Sequence layout (full bidirectional attention, N_TOK=546 tokens total):
+    [ img_A×225 | img_B×225 | prog_A×48 | prog_B_query×48 ]
+    (images downsampled to 15×15 via Conv2d before tokenisation)
 
 Key ideas
 ---------
@@ -81,8 +82,8 @@ N_ENC       = N_LAYERS // 2            # 3: blocks that inject 2D PE (image side
 
 # ILV
 N_ILV    = N_LAYERS - 1    # 5: ILV[l] added before block l, for l = 0 .. N_ILV-1
-N_INF    = 8               # iterative inference passes per batch
-ETA_ILV  = 1e-3            # SGD step size for ILV
+N_INF    = 16               # iterative inference passes per batch
+ETA_ILV  = 1e-2            # SGD step size for ILV
 WD_ILV   = 0.1             # manual L2 coefficient applied every ILV step
 L1_ILV   = 1e-4            # L1 coefficient (only if USE_L1=True)
 STD_ILV  = 0.05            # ILV initialisation noise std dev
@@ -271,12 +272,12 @@ class Lifter(nn.Module):
     """
     Transformer for LOGO inverse graphics with iterative ILV inference.
 
-    Sequence layout (full bidirectional attention, 1896 tokens):
-        [ img_A×900 | img_B×900 | prog_A×48 | prog_B_query×48 ]
+    Sequence layout (full bidirectional attention, N_TOK=546 tokens):
+        [ img_A×225 | img_B×225 | prog_A×48 | prog_B_query×48 ]
 
     SPE injection (before each block):
         blocks 0..2 : add spe_enc  (2D PE in dims 0:32 of image token slots;
-                                    same 30×30 grid for both img_A and img_B)
+                                    same 15×15 grid for both img_A and img_B)
         blocks 3..5 : add spe_dec  (linear PE in dims 0:32 of all 96 prog slots;
                                     positions 0..47 = prog_A, 48..95 = prog_B)
 
@@ -365,8 +366,8 @@ class Lifter(nn.Module):
         dec_buf = torch.zeros(N_TOK, d_model)
         dec_buf[N_IMG:,                :D_SPE] = spelin  # all 96 prog tokens
 
-        self.register_buffer('spe_enc', enc_buf.unsqueeze(0))  # [1, 1896, d]
-        self.register_buffer('spe_dec', dec_buf.unsqueeze(0))  # [1, 1896, d]
+        self.register_buffer('spe_enc', enc_buf.unsqueeze(0))  # [1, N_TOK, d]
+        self.register_buffer('spe_dec', dec_buf.unsqueeze(0))  # [1, N_TOK, d]
 
         # -- Optional amortisation --------------------------------------------
         if use_amort:
@@ -414,7 +415,7 @@ class Lifter(nn.Module):
         prog_a_emb = self.prog_embed(prog_a.long())                   # [B,  48, d]
         prog_b_emb = self.prog_query.expand(B, -1, -1)               # [B,  48, d]
 
-        h = torch.cat([img_a_emb, img_b_emb, prog_a_emb, prog_b_emb], dim=1)  # [B, 1896, d]
+        h = torch.cat([img_a_emb, img_b_emb, prog_a_emb, prog_b_emb], dim=1)  # [B, N_TOK, d]
 
         for l, block in enumerate(self.blocks):
             # ILV injection (not on the final block)
@@ -598,6 +599,113 @@ class Lifter(nn.Module):
 
 
 # ============================================================================
+# ILV independence diagnostic
+# ============================================================================
+
+def test_ilv_independence(model: 'Lifter', device: torch.device,
+                          batch_size: int = 2) -> None:
+    """
+    Verify that:
+      1. ILV gradients are non-zero  (autograd graph is connected).
+      2. ILV actually changes after each manual SGD step.
+      3. ilv_loss and weight_loss in train_step() are not bit-for-bit identical.
+      4. Loss trajectory across inference passes is printed for inspection.
+
+    Intended as a quick sanity check when ilv_loss == weight_loss is observed.
+    Raises AssertionError on critical failures; prints INFO/WARN for softer issues.
+    """
+    model.train()
+    torch.manual_seed(0)
+    x      = torch.rand(batch_size, 2, IMG_H, IMG_W, device=device)
+    y      = torch.randint(0, VOCAB, (batch_size, N_PROG), device=device)
+    prog_a = y[:, :N_PROG_A].long()
+    prog_b = y[:, N_PROG_A:].long()
+
+    print("\n=== test_ilv_independence ===")
+
+    # ---- 1. Gradient connectivity ----------------------------------------
+    ilv = model._init_ilv(batch_size, device, x)
+    print(f"  ILV shape:           {tuple(ilv.shape)}")
+    print(f"  ILV requires_grad:   {ilv.requires_grad}")
+    print(f"  ILV data norm (init):{ilv.detach().norm().item():.6f}")
+
+    logits = model.forward(x, prog_a, ilv)
+    loss0  = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
+    (g,)   = torch.autograd.grad(loss0, ilv)
+
+    grad_norm = g.norm().item()
+    print(f"\n  [1] ILV gradient norm after pass-0: {grad_norm:.6e}")
+    assert grad_norm > 1e-8, (
+        f"FAIL: ILV gradient is effectively zero (norm={grad_norm:.2e}).\n"
+        "      Autograd graph may be disconnected between loss and ILV."
+    )
+    print(f"      => PASS: gradient is non-zero")
+
+    # ---- 2. ILV data actually changes ------------------------------------
+    ilv_before = ilv.detach().clone()
+    with torch.no_grad():
+        ilv.data -= model.eta_ilv * (g + model.wd_ilv * ilv.data)
+    delta = (ilv.detach() - ilv_before).norm().item()
+
+    print(f"\n  [2] ILV delta norm after 1 SGD step: {delta:.6e}")
+    assert delta > 1e-12, (
+        f"FAIL: ILV did not change after SGD step (delta={delta:.2e}).\n"
+        "      Check eta_ilv and that ilv.data is being updated in-place."
+    )
+    print(f"      => PASS: ILV changed")
+
+    # ---- 3. Loss trajectory over all inference passes --------------------
+    # Re-init so we start fresh for the trajectory test
+    ilv2     = model._init_ilv(batch_size, device, x)
+    losses_v = []
+    for step in range(model.n_inference):
+        logits_i = model.forward(x, prog_a, ilv2)
+        loss_i   = F.cross_entropy(logits_i.reshape(-1, VOCAB), prog_b.reshape(-1))
+        losses_v.append(loss_i.item())
+        (g_i,)   = torch.autograd.grad(loss_i, ilv2)
+        with torch.no_grad():
+            ilv2.data -= model.eta_ilv * (g_i + model.wd_ilv * ilv2.data)
+
+    print(f"\n  [3] Loss per inference pass (n_inference={model.n_inference}):")
+    for i, lv in enumerate(losses_v):
+        marker = " <-- ilv_loss" if i == len(losses_v) - 1 else ""
+        print(f"      pass {i:2d}: {lv:.10f}{marker}")
+
+    # Weight-update forward with fixed ILV
+    ilv_fixed = ilv2.detach()
+    w_logits  = model.forward(x, prog_a, ilv_fixed)
+    w_loss_v  = F.cross_entropy(
+        w_logits.reshape(-1, VOCAB), prog_b.reshape(-1)
+    ).item()
+    print(f"      weight :  {w_loss_v:.10f}  <-- weight_loss")
+
+    ilv_loss_v = losses_v[-1]
+    diff       = abs(ilv_loss_v - w_loss_v)
+    print(f"\n      |ilv_loss - weight_loss| = {diff:.3e}")
+
+    if ilv_loss_v == w_loss_v:
+        # Bit-for-bit identical: indicates the ILV update had zero effect
+        print("      WARNING: losses are bit-for-bit identical!")
+        print("               Likely cause: gradient magnitude is negligible,")
+        print("               so ILV barely moves and both passes see same weights+ILV.")
+        print(f"               grad_norm={grad_norm:.2e}, eta_ilv={model.eta_ilv}")
+    else:
+        print(f"      => PASS: ilv_loss != weight_loss (losses are independent)")
+
+    # ---- 4. train_step round-trip (high-precision print) -----------------
+    losses_ts = model.train_step(x, y)
+    print(f"\n  [4] train_step() round-trip (high precision):")
+    print(f"      ilv_loss    = {losses_ts['ilv_loss']:.10f}")
+    print(f"      weight_loss = {losses_ts['weight_loss']:.10f}")
+    diff_ts = abs(losses_ts['ilv_loss'] - losses_ts['weight_loss'])
+    print(f"      difference  = {diff_ts:.3e}")
+    if losses_ts['ilv_loss'] == losses_ts['weight_loss']:
+        print("      WARNING: train_step losses are bit-for-bit identical!")
+    else:
+        print("      => PASS: train_step losses differ")
+
+
+# ============================================================================
 # Smoke test
 # ============================================================================
 
@@ -651,3 +759,6 @@ if __name__ == '__main__':
     model3 = Lifter(use_l1=True, n_inference=2).to(dev)
     losses3 = model3.train_step(x, y)
     print(f"  ILV loss (L1 on):  {losses3['ilv_loss']:.4f}  OK")
+
+    # -- ILV independence diagnostic (catches ilv_loss == weight_loss bugs) --
+    test_ilv_independence(model, dev)

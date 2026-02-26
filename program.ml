@@ -103,7 +103,7 @@ type tsteak = (* thread state *)
 	; mutable batchno : int (* for e.g doing garbage collection *)
 	; mutable pool : Domainslib.Task.pool (* needs to be replaced for dream *)
 	; de : decode_tensors
-	; training : (int*int*int) array
+	; training : (int*int) array
 	}
 
 let read_lines name : string list =
@@ -322,14 +322,15 @@ let make_training steak =
 	let dist,prev = Graf.dijkstra steak.gs 0 false in
 
 	let rec make_devlist l r =
-		(* assemble a list, reverse order, for the chain of programs
+		(* assemble a list l, reverse order, for the chain of programs
 		leading to a terminal r *)
+		let ll = r :: l in
 		if r >= 0 then (
 			let q = prev.(r) in
 			if q >= 0 then (
-				make_devlist ( r :: l ) q
-			) else l
-		) else l
+				make_devlist ll q
+			) else ll
+		) else ll
 	in
 
 	let print_devlist k l =
@@ -352,7 +353,7 @@ let make_training steak =
 
 			(* this would probably be simpler with nested for-loops
 				but ohwell, let's do it the ocaml way *)
-			let rec select_c acc ll a b =
+			(*let rec select_c acc ll a b =
 				if List.length ll > 0 then (
 					let c = List.hd ll in
 					select_c ((a,b,c) :: acc) (List.tl ll) a b
@@ -372,9 +373,18 @@ let make_training steak =
 					let aacc = select_bc acc (List.tl ll) a in
 					select_abc aacc (List.tl ll)
 				) else acc
+			in*)
+
+			let rec select_ab acc ll =
+				if List.length ll >= 2 then (
+					let a = List.hd ll in
+					let llt = List.tl ll in
+					let b = List.hd llt in
+					select_ab ((a,b) :: acc) llt
+				) else acc
 			in
 
-			let acc = select_abc [] l in
+			let acc = select_ab [] l in
 			(k+1, List.rev_append acc lst)
 		) else (
 			(k+1, lst)
@@ -423,10 +433,9 @@ let make_training steak =
 let new_batche_train steak dt bi = 
 	let n = Array.length steak.training in
 	let i = Random.int n in
-	let (pre,post,context) = steak.training.(i) in
+	let (pre,post) = steak.training.(i) in
 	let a = steak.gs.g.(pre) in
 	let b = steak.gs.g.(post) in
-	let c = steak.gs.g.(context) in
 	let _,edits,_ = Graf.get_edits a.ed.progenc b.ed.progenc in
 	if bi = 0 then (
 		Logs.debug (fun m->m "new_batche_train edit count %d \n\t%d %s \n\t%d %s"
@@ -438,9 +447,9 @@ let new_batche_train steak dt bi =
 	; b_pid = post
 	; a_progenc = a.ed.progenc
 	; b_progenc = b.ed.progenc
-	; c_progenc = a.ed.progenc
+	; c_progenc = b.ed.progenc (* n.b. context *)
 	; a_imgi = a.imgi
-	; b_imgi = c.imgi (* c = harder! :-) *)
+	; b_imgi = b.imgi
 	; edits
 	; edited
 	; count = 0
@@ -475,7 +484,7 @@ let rec new_batche_mnist_mse steak bi =
 		{  a_pid = indx; b_pid = mid;
 			a_progenc = a.ed.progenc; 
 			b_progenc = ""; (* only used for checking *)
-			c_progenc = a.ed.progenc; 
+			c_progenc = a.ed.progenc;
 			a_imgi = a.imgi; 
 			b_imgi = mid; 
 			edits = []; edited; count=0; dt }
@@ -998,9 +1007,9 @@ let bigfill_batchd steak bd =
 		String.iteri (fun i c -> 
 			let j = (Char.code c) - offs in
 			if i < llim then bd.bpro.{u,i} <- foi j ) be.a_progenc ;
-		let lc = String.length be.c_progenc in
-		if lc > llim then 
-			Logs.debug(fun m -> m  "c_progenc too long(%d):%s" lc be.c_progenc);
+		let lb = String.length be.b_progenc in
+		if lb > llim then
+			Logs.debug(fun m -> m  "b_progenc too long(%d):%s" lb be.b_progenc);
 		let loff = p_ctx/2 in
 		String.iteri (fun i c ->
 			let j = (Char.code c) - offs in
@@ -1008,7 +1017,7 @@ let bigfill_batchd steak bd =
 				bd.bpro.{u,i+loff} <- foi j;
 				(* indicate this is c, to be edited *)
 				(*bd.bpro.{u,i+l,toklen-1} <- 1.0*)
-				) ) be.c_progenc ;
+				) ) be.b_progenc ;
 		(* copy over the edited tags (set in update_edited) *)
 		(*assert (Array.length be.edited = (p_ctx/2)) ;
 		let lim = if lc > p_ctx/2 then p_ctx/2 else lc in
@@ -1241,6 +1250,7 @@ let init_database steak count =
 	let tryadd stk data img override =
 		let good,dist,minde = if override then true,10000.0,0
 			else simdb_dist stk img in
+		(* convert the image index to a program index *)
 		let mindex = stk.gs.img_inv.(minde) in
 		if mindex < 0 then (
 			simdb_to_png stk minde "tryadd_error.png"; 
@@ -1302,7 +1312,7 @@ let init_database steak count =
 			(*Logs.debug (fun m->m "%d: %s reject, dist: %f to: %d" 
 				!iters s dist mindex)*)
 		)
-		) else (
+		) else ( (* not good *)
 			(*Logs.debug (fun m->m "%d: dist %f not good: %s %f" !iters dist s data.scost)*)
 		) ; 
 		incr iters
@@ -1310,16 +1320,18 @@ let init_database steak count =
 
 	let tryadd_fromstr stk str override =
 		(*Logs.debug (fun m->m "tryadd %s" str); *)
-		let sc = if String.length str = 0 then "" else ";" in
+(* 		let sc = if String.length str = 0 then "" else ";" in *)
 		(*let str2 = "(" ^ str ^ sc ^ " )" in*)
 		(* make the heading of the turtle visible *)
-		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in
+(* 		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in *)
+		let str2 = str in
 		let data,img = generate_logo_fromstr str2 in
+		(* data is type Graf.edata *)
 		(*Logs.debug (fun m->m "tryadd %s" str2);*)
 		tryadd stk data img override
 	in
 
-	tryadd_fromstr steak "" true;
+	tryadd_fromstr steak "" true; (* override *)
 	tryadd_fromstr steak "move 1, 1" false;
 	tryadd_fromstr steak "move 1, 0 - 1" false;
 	tryadd_fromstr steak "move 2, 1" false;

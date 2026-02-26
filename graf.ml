@@ -20,8 +20,8 @@ let foi = float_of_int
 let iof = int_of_float
 
 module SI = Set.Make( 
-	(* set for outgoing connections *)
-	(* node#, edit type, edit count, cost *)
+	(* set for edges aka outgoing connections *)
+	(* destination node#, edit type, edit count, cost *)
 	(* type and count are for sorting / selecting *)
 	struct
 		let compare (a,_,_,_) (b,_,_,_) = compare a b
@@ -217,6 +217,7 @@ let connect mtx pool g indx =
 	(* editing the graph; lock the mutex. *)
 	Mutex.lock mtx; 
 	List.iter (fun (i,typ,cnt,cost) ->
+			(* dest node, edit type, edit count, cost *)
 		let invtyp = match typ with
 			| "del" -> "ins"
 			| "ins" -> "del"
@@ -252,7 +253,7 @@ let get_slot_img gs =
 let add_uniq mtx pool gs ed = 
 	(* add a unique node to the graph structure *)
 	(* returns where it's stored; for now = imgf index *)
-	 Mutex.lock mtx; 
+	 Mutex.lock mtx;
 	let ni = get_slot gs in
 	let imgi = get_slot_img gs in
 	 Mutex.unlock mtx; 
@@ -770,8 +771,10 @@ let remove_unused mtx gs =
 let remove_unreachable mtx gs = 
 	let dist,prev = dijkstra gs 0 false in
 	
-	let unreachable,_ = Array.fold_left (fun (a,i) b -> 
-		if gs.g.(i).progt <> `Np && b < 0.0
+	(* count unreachable nodes *)
+	(* FIXME does not seem to remove? *)
+	let unreachable,_ = Array.fold_left (fun (a,i) d ->
+		if gs.g.(i).progt <> `Np && d < 0.0
 			then (a+1,i+1) 
 			else (a,i+1)
 			) (0,0) dist in
@@ -854,7 +857,7 @@ let gexf_out gs =
 	Printf.fprintf fid "</graph>\n";
 	Printf.fprintf fid "</gexf>\n";
 	close_out fid; 
-	Logs.info (fun m->m "saved db.gexf\n");;
+	Logs.info (fun m->m "saved db.gexf");;
 
 (*let () = 
 	let gs = create 5 in

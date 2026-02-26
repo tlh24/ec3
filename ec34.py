@@ -85,7 +85,7 @@ if dreaming:
 # 	return y,q,lossflat
 	
 
-for u in range(100):
+for u in range(1000):
 	# keep things synchronous for now. 
 	socket_client.send_and_receive(message="update_batch")
 	
