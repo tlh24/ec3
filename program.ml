@@ -53,7 +53,7 @@ let nulbatche =
 	
 type batchd = (* batch data structure *)
 	{ bpro : (float, Bigarray.float32_elt, Bigarray.c_layout)
-				Bigarray.Array3.t (* btch , p_ctx , p_indim *)
+				Bigarray.Array2.t (* btch , p_ctx *)
 	; bimg : (float, Bigarray.float32_elt, Bigarray.c_layout) 
 				Bigarray.Array3.t (* btch*3, image_res, image_res *)
 	; bedts : (float, Bigarray.float32_elt, Bigarray.c_layout) 
@@ -400,6 +400,7 @@ let make_training steak =
 	close_out fid; 
 	
 	Graf.gexf_out steak.gs ;
+
 	let ta = Array.of_list training in
 	{steak with training = ta}
 	;;
@@ -981,7 +982,7 @@ let bigfill_batchd steak bd =
 	(* first clear them *)
 	(*Bigarray.Array3.fill bd.bimg 0.0 ;*)
 	(* fill one-hots *)
-	Bigarray.Array3.fill bd.bpro 0.0 ;
+	Bigarray.Array2.fill bd.bpro 0.0 ;
 	Bigarray.Array2.fill bd.bedts 0.0 ; 
 	for u = 0 to !batch_size-1 do (
 		bd.bedts.{u,0} <- -1. (* TEST (checked via min, python side) *)
@@ -989,34 +990,35 @@ let bigfill_batchd steak bd =
 	let innerloop_bigfill_batchd u = 
 		let be = bd.bea.(u) in
 	(* - bpro - *)
-		let offs = Char.code '0' in
+		let offs = Char.code '0' in (* for the string encoding; see logo.ml *)
 		let llim = (p_ctx/2)-2 in
-		let l = String.length be.a_progenc in
-		if l > llim then 
-			Logs.debug(fun m -> m  "a_progenc too long(%d):%s" l be.a_progenc);
+		let la = String.length be.a_progenc in
+		if la > llim then
+			Logs.debug(fun m -> m  "a_progenc too long(%d):%s" la be.a_progenc);
 		String.iteri (fun i c -> 
 			let j = (Char.code c) - offs in
-			if i < llim then bd.bpro.{u,i,j} <- 1.0 ) be.a_progenc ; 
-		let la = String.length be.a_progenc in
+			if i < llim then bd.bpro.{u,i} <- foi j ) be.a_progenc ;
 		let lc = String.length be.c_progenc in
 		if lc > llim then 
 			Logs.debug(fun m -> m  "c_progenc too long(%d):%s" lc be.c_progenc);
-		String.iteri (fun i c -> 
+		let loff = p_ctx/2 in
+		String.iteri (fun i c ->
 			let j = (Char.code c) - offs in
-			if (i+l) < 2*llim then (
-				bd.bpro.{u,i+l,j} <- 1.0; 
+			if (i+loff) < 2*llim then (
+				bd.bpro.{u,i+loff} <- foi j;
 				(* indicate this is c, to be edited *)
-				bd.bpro.{u,i+l,toklen-1} <- 1.0 ) ) be.c_progenc ;
+				(*bd.bpro.{u,i+l,toklen-1} <- 1.0*)
+				) ) be.c_progenc ;
 		(* copy over the edited tags (set in update_edited) *)
-		assert (Array.length be.edited = (p_ctx/2)) ; 
+		(*assert (Array.length be.edited = (p_ctx/2)) ;
 		let lim = if lc > p_ctx/2 then p_ctx/2 else lc in
 		assert (la < p_ctx/2); 
 		for i = 0 to lim-1 do (
 			bd.bpro.{u,la+i,toklen} <- be.edited.(i)
 			(* a_progenc is zeroed via fill above *)
-		) done; 
+		) done; *)
 		(* position encoding *)
-		let l = if l > llim then llim else l in 
+		(*let l = if l > llim then llim else l in
 		let lc = if lc > llim then llim else lc in
 		for i = 0 to l-1 do (
 			bd.bpro.{u,i,toklen+1} <- (foi i);
@@ -1035,10 +1037,11 @@ let bigfill_batchd steak bd =
 			(*for j = 0 to poslen-1 do (
 				bd.bpro.{u,i+l,toklen+1+j} <- bd.posenc.{i,j}
 			) done*)
-		) done ;
+		) done ;*)
 	(* - bimg - *)
 		if bd.fresh.(u) then (
 			let pid_to_ba1 imgi dt = 
+				(* convert program ID to a bigarray ref *)
 				if imgi < 0 then (
 					Logs.err (fun m->m "imgi:%d be.a_pid:%d be.b_pid:%d be.a_imgi:%d be.b_imgi:%d"
 					imgi be.a_pid be.b_pid be.a_imgi be.b_imgi)
@@ -1064,9 +1067,9 @@ let bigfill_batchd steak bd =
 				for j=0 to (image_res-1) do (
 					let aif = (foi aimg.{i*image_res+j}) /. 255.0 in
 					let bif = (foi bimg.{i*image_res+j}) /. 255.0 in
-					bd.bimg.{3*u+0,i,j} <- aif; 
-					bd.bimg.{3*u+1,i,j} <- bif;
-					bd.bimg.{3*u+2,i,j} <- aif -. bif;
+					bd.bimg.{2*u+0,i,j} <- aif;
+					bd.bimg.{2*u+1,i,j} <- bif;
+					(*bd.bimg.{3*u+2,i,j} <- aif -. bif; do this in python *)
 				) done
 			) done ; 
 			bd.fresh.(u) <- false
@@ -1134,10 +1137,10 @@ let init_batchd steak superv =
 	let filnum = if superv then 0 else 1 in
 	let mkfnam s = 
 		Printf.sprintf "%s_%d.mmap" s filnum in
-	let fd_bpro,bpro = mmap_bigarray3 (mkfnam "bpro") 
-			!batch_size p_ctx p_indim in
+	let fd_bpro,bpro = mmap_bigarray2 (mkfnam "bpro")
+			!batch_size p_ctx in
 	let fd_bimg,bimg = mmap_bigarray3 (mkfnam "bimg") 
-			(!batch_size*3) image_res image_res in
+			(!batch_size*2) image_res image_res in
 			(* note: needs a reshape on python side!! *)
 	(* supervised batch of edits: ocaml to python *)
 	let fd_bedts,bedts = mmap_bigarray2 (mkfnam "bedts") 
@@ -1157,7 +1160,7 @@ let init_batchd steak superv =
 	) done ;
 	(*let device = Torch.Device.Cpu in
 	let posencn = tensor_of_bigarray2 posenc device |> normalize_tensor in*)
-	Bigarray.Array3.fill bpro 0.0 ;
+	Bigarray.Array2.fill bpro 0.0 ;
 	Bigarray.Array3.fill bimg 0.0 ;
 	Bigarray.Array2.fill bedts 0.0 ;
 	Bigarray.Array2.fill bedtd 0.0 ; 
@@ -1309,6 +1312,7 @@ let init_database steak count =
 		(*Logs.debug (fun m->m "tryadd %s" str); *)
 		let sc = if String.length str = 0 then "" else ";" in
 		(*let str2 = "(" ^ str ^ sc ^ " )" in*)
+		(* make the heading of the turtle visible *)
 		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in
 		let data,img = generate_logo_fromstr str2 in
 		(*Logs.debug (fun m->m "tryadd %s" str2);*)
@@ -1389,7 +1393,7 @@ let init_database steak count =
 			r3 := s2 :: !r3; 
 			incr n
 		) done;
-		while !n < (iof ((foi count) *. 1.0)) do (
+		while !n < count do (
 			let i = Random.int nra in
 			let j = Random.int nra in
 			let k = Random.int nra in

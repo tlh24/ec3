@@ -162,7 +162,7 @@ let select_ node =
 
 	
 let rec update node targadr curadr (eds: (string*int*char) list) (pr:float list) = 
-	(* given an targe address, update the probs and edits *)
+	(* given an target address, update the probs and edits *)
 	if targadr = curadr then (
 		(* filter redundant edits: you can't edit the same position twice *)
 		let edits,probs = List.fold_left (fun (i,acc) ((typ,pos,chr),pr) -> 

@@ -5,46 +5,35 @@ import time
 import argparse
 import os
 from data_exchange import SocketClient, MemmapOrchestrator
-from config import ModelConfig
-from recognizer.model import Recognizer
+# from recognizer.model import Recognizer
+from lifter.model import Lifter
 # import wandb
-import torch._dynamo as dynamo
-dynamo.config.verbose=True
-# note: I can't seem to get dynamo to work. tlh April 7 2023
 
 
 parser = argparse.ArgumentParser(description='Transformer-based program synthesizer')
-parser.add_argument("-b", "--batch_size", help="Set the batch size", type=int)
+parser.add_argument("-b", "--batch_size", help="Set the batch size", type=int, default=32)
 parser.add_argument("-d", "--dreaming", help="Set the model to dream", action="store_true")
 args = parser.parse_args()
 batch_size = args.batch_size
 dreaming = args.dreaming
+training = not dreaming
+mmapno = 1 if dreaming else 0
 
 
-mc = ModelConfig(dreaming=args.dreaming, batch_size=args.batch_size)
-
-# run = wandb.init(entity='cortex-ec3', project="cortex", config=mc.dict(), mode="disabled")
-
-print(f"batch_size:{mc.batch_size}")
-print(f"dreaming:{mc.dreaming}")
+print(f"batch_size:{batch_size}")
+print(f"dreaming:{dreaming}")
 
 # setup the socket client and handshake with the server.
-socket_client = SocketClient(mc.dreaming)
+socket_client = SocketClient(dreaming)
 socket_client.connect()
 # socket_client.handshake() -- not needed anymore!  April 27 2023
 
-
-os.system(mc.edsiz_allocate_command)
-# the other mmaps are allocated by ocaml.
 	
 mo = MemmapOrchestrator(
-	mmapno=mc.mmapno, 
-	p_ctx=mc.p_ctx, 
-	poslen=mc.poslen,
-	batch_size=mc.batch_size,
-	p_indim=mc.p_indim,
-	image_res=mc.image_res,
-	e_indim=mc.e_indim,
+	mmapno=mmapno,
+	p_ctx=96,
+	batch_size=batch_size,
+	image_res=30
 )
 
 torch_device = 0
@@ -56,150 +45,86 @@ th.set_default_device('cuda')
 th.set_float32_matmul_precision('high') # desktop.
 
 
+model = Lifter(use_l1=False, use_amort=False)
 
-model = Recognizer(
-	image_resolution = mc.image_res, 
-	vision_width = mc.vision_width, 
-	patch_size = mc.patch_size, 
-	prog_width = mc.prog_width, 
-	embed_dim = mc.embed_dim, 
-	v_ctx = mc.v_ctx, 
-	p_ctx = mc.p_ctx, 
-	p_indim = mc.p_indim, 
-	e_indim = mc.e_indim
- )
-
-model.print_n_params()
+model.count_params()
 
 from os.path import exists
-fname = "checkpoints/recognizer_checkpoint.ptx"
+fname = "checkpoints/lifter_checkpoint.ptx"
 if exists(fname): 
 	loaded_dict = torch.load(fname)
 	model.load_state_dict(loaded_dict)
 	print(f"loaded {fname}")
 else: 
-	if exists("ec32.ptx"):
-		loaded_dict = torch.load("ec32.ptx")
+	if exists("ec34.ptx"):
+		loaded_dict = torch.load("ec34.ptx")
 		model.load_state_dict(loaded_dict)
 
-# model = nn.DataParallel(model)
-
-# loss is on the predicted edit: 
-# [0:4] is the categorical edit type, sub del ins fin
-# [4:toklen] is the categorical character/token.  
-# [5+toklen:5+toklen+poslen] is the (absolute) position encoding.
-# not sure why there is a 5 in there.
-
-lossfunc_cel = nn.CrossEntropyLoss(label_smoothing = 0.08, reduction='mean')
-lossfunc_mse = nn.MSELoss(reduction='mean')
-# !SGD does not work!  Adam or AdamW is much better.  
-optimizer = optim.Adam(model.parameters(), lr=mc.learning_rate)
+model.to('cuda')
 
 	
 scaler = torch.amp.GradScaler('cuda')
 slowloss = 1.0
 losslog = open("loss_log.txt", "w")
 tic = time.time()
-if mc.training:
+if training:
 	print("training...")
-if mc.dreaming:
+if dreaming:
 	print("dreaming...")
 	torch. set_grad_enabled(False)
 
 # compiling this does not seem to work... 
-def train(mod, bimg, bpro, bedts): 
-	model.zero_grad()
-	y,q = model(u, bimg, bpro)
-	loss = lossfunc_mse(y, bedts)
-	lossflat = th.sum(loss)
-	lossflat.backward()
-	th.nn.utils.clip_grad_norm_(model.parameters(), 0.025)
-	optimizer.step()
-	return y,q,lossflat
+# def train(mod, bimg, bpro, bedts):
+# 	model.zero_grad()
+# 	y,q = model(u, bimg, bpro)
+# 	loss = lossfunc_mse(y, bedts)
+# 	lossflat = th.sum(loss)
+# 	lossflat.backward()
+# 	th.nn.utils.clip_grad_norm_(model.parameters(), 0.025)
+# 	optimizer.step()
+# 	return y,q,lossflat
 	
 
-for u in range(mc.train_iters): 
+for u in range(100):
 	# keep things synchronous for now. 
 	socket_client.send_and_receive(message="update_batch")
 	
 	bpro = mo.read_bpro()
 	bimg = mo.read_bimg()
-	bedts = mo.read_bedts()
-
-	if th.min(bedts[:,0]) < 0: 
-		print("bedts synchronization issue!")
 	
-	if mc.training: 
+	if training:
 		model.zero_grad()
 		x = bimg.cuda()
+		# add some noise to discourage sensitivity
 		x = x + th.poisson(th.ones_like(x)) / 12 # perceptually, looks ok.
-		y,q = model(u, bimg.cuda(), bpro.cuda())
-		targ = bedts.cuda()
-		
-		# alternate between MSE and cross-entropy losses
-		if True: # (u // 500) % 2 == 0: 
-			loss_mse = lossfunc_mse(y, targ)
-			lossflat = th.sum(loss_mse)
-		else: 
-			loss_cel = lossfunc_cel(y[:,0:4], targ[:,0:4]) + \
-					lossfunc_cel(y[:,4:mc.toklen], targ[:,4:mc.toklen]) + \
-					lossfunc_cel(y[:,5+mc.toklen:], targ[:,5+mc.toklen:])
-			lossflat = th.sum(loss_cel)
-		# lossflat = th.sum(2*loss_mse + loss_cel)
-		
-		lossflat.backward()
-		th.nn.utils.clip_grad_norm_(model.parameters(), 0.025)
-		optimizer.step() 
-		lossflat.detach()
-	# else: 
-	# 	bimg = bimg.cuda()
-	# 	bpro = bpro.cuda()
-	# 	# introduce noise to the target image and average model output 
-	# 	# so ocaml has a better estimate of edit probabilities
-	# 	bimg1 = bimg + th.randn(batch_size, 3, mc.image_res, mc.image_res) * 0.1
-	# 	y1,q = model(u, bimg1, bpro)
-	# 	bimg2 = bimg + th.randn(batch_size, 3, mc.image_res, mc.image_res) * 0.1
-	# 	y2,q = model(u, bimg2, bpro)
-	# 	bimg3 = bimg + th.randn(batch_size, 3, mc.image_res, mc.image_res) * 0.1
-	# 	y3,q = model(u, bimg3, bpro)
-	# 	y = (y1 + y2 + y3)/3.0
-	# 	lossflat = 0.0
-	else: 
-		bimg = bimg.cuda()
-		bpro = bpro.cuda()
-		y,q = model(u, bimg, bpro)
-		lossflat = 0.0
-  
-	slowloss = 0.99*slowloss + 0.01 * lossflat
+		lossdict = model.train_step(bimg.cuda(), bpro.cuda())
  
-	if mc.training: 
-		losslog.write(f"{u}\t{slowloss}")
-		for i in range(q.shape[0]): 
-			losslog.write(f"\t{q[i].cpu().item()}")
-		losslog.write(f"\t{mc.nreplace+0.001}")
+		weight_loss = lossdict["weight_loss"]
+		ilv_loss = lossdict["ilv_loss"]
+		amort_loss = lossdict["amort_loss"]
+		losslog.write(f"{u}\t{weight_loss}\t{ilv_loss}\t{amort_loss}")
 		losslog.write("\n")
 		losslog.flush()
 	
-	mo.write_bedtd(y)
-	if mc.training: 
-		mo.write_editdiff(bedts - y.cpu()) # synchronization.
+	# mo.write_bedtd(y)
+	# if training:
+	# 	mo.write_editdiff(bedts - y.cpu()) # synchronization.
 	socket_client.send_and_receive(message="decode_edit")
   
 	if u % 11 == 0 :
 		toc = time.time()
 		rate = int((batch_size * 11) / (toc - tic))
 		tic = toc
-		print(f'{u} {mc.learning_rate:.6f} loss: {lossflat:.5f}; slowloss {slowloss:.5f}; {rate} samp/sec')
+		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; {rate} samp/sec')
 				
 	if u % 1000 == 999 : 
-		if mc.training: 
+		if training:
 			model.save_checkpoint()
-		if mc.dreaming: 
+		if dreaming:
 			model.load_checkpoint()
 			print("dreamer reloaded model parameters.")
 	
 
-
 mo.close()
-socket_client.close()
+# socket_client.close() called automatically
 

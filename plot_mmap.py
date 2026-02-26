@@ -87,19 +87,24 @@ def plot_tensor(r, c, v, name, lo, hi):
 	#cbar[r][c].update_normal(im[r][c]) # probably does nothing
 	axs[r,c].set_title(name)
 
+def plot_line(r, c, v, name):
+	axs[r,c].cla()
+	axs[r,c].plot(v, 'bo')
+	axs[r,c].set_title(name)
+
 bs = batch_size
 if batch_size > 32: 
 	bs = 32
 
 while True:
-	bpro = read_mmap(fd_bpro, [batch_size, p_ctx, p_indim])
-	bimg = read_mmap(fd_bimg, [batch_size, 3, image_res, image_res])
+	bpro = read_mmap(fd_bpro, [batch_size, p_ctx])
+	bimg = read_mmap(fd_bimg, [batch_size, 2, image_res, image_res])
 	bedts = read_mmap(fd_bedts, [batch_size, e_indim])
 	bedtd = read_mmap(fd_bedtd, [batch_size, e_indim])
 	posenc = read_mmap(fd_posenc, [p_ctx, poslen])
 	editdiff = read_mmap(fd_editdiff, [batch_size, e_indim])
 
-	plot_tensor(0, 0, bpro[0,:,:], "bpro[0,:,:]", -2.0, 2.0)
+	plot_line(0, 0, bpro[0,:], "bpro[0,:,:]")
 	img0 = bimg[0,0,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
 	img1 = bimg[0,1,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
 	plot_tensor(0, 1, img0, "bimg[0,0,:,:]", -1.0, 1.0)

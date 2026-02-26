@@ -303,7 +303,7 @@ let decode_program il =
 let intlist_to_string e =
 	(* convenience encoding -- see asciitable for what it turns to *)
 	let offs = 10 + (Char.code '0') in 
-	(* integers are mapped 1:1, 0 -> [-10] -> 0 -> '0' *)
+	(* integers are mapped 1:1, 0 -> [-10] -> '0' *)
 	let cof_int i = Char.chr (i + offs) in
 	let bf = Buffer.create 32 in
 	List.iter (fun a -> Buffer.add_char bf (cof_int a)) e;

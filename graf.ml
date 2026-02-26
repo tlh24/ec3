@@ -488,7 +488,7 @@ let pro_to_edata pro res =
 	{pro; progenc; progaddr; scost; pcost; segs },img
 	
 let pro_to_edata_opt pro res = 
-	(* returns `None if the prorgam doesn't meet segment criteria *)
+	(* returns `None if the program doesn't meet segment criteria *)
 	let ed,img = pro_to_edata pro res in
 	let lx,hx,ly,hy = Ast.segs_bbx ed.segs in
 	let dx = hx-.lx in
@@ -812,7 +812,7 @@ let remove_unreachable mtx gs =
 		
 let gexf_out gs = 
 	(* save GEXF file for gephi visualization *)
-	let fid = open_out "../prog-gephi-viz/db.gexf" in
+	let fid = open_out "db.gexf" in
 	Printf.fprintf fid "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"; 
 	Printf.fprintf fid "<gexf xmlns=\"http://gexf.net/1.3\" version=\"1.3\">\n"; 
 	Printf.fprintf fid "<graph mode=\"static\" defaultedgetype=\"directed\">\n"; 
@@ -854,7 +854,7 @@ let gexf_out gs =
 	Printf.fprintf fid "</graph>\n";
 	Printf.fprintf fid "</gexf>\n";
 	close_out fid; 
-	Printf.printf "saved ../prog-gephi-viz/db.gexf\n";; 
+	Logs.info (fun m->m "saved db.gexf\n");;
 
 (*let () = 
 	let gs = create 5 in
