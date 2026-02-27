@@ -1,8 +1,9 @@
+# -- Commands for getting Lambda instance up and running --
+
 # Install conda
 # wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh -bfp /usr/local && rm Miniconda3-latest-Linux-x86_64.sh && /usr/local/bin/conda init
 
 
-# commands for getting lambda labs up and running
 sudo chmod +rw /usr/bin
 sudo apt-get update
 sudo apt-get install -y make gcc unzip bubblewrap libpcre2-dev menhir
@@ -27,25 +28,9 @@ mv libtorch ~
 export LIBTORCH=~/libtorch
 
 opam install --confirm-level=unsafe-yes vg cairo2 vector lwt logs domainslib ocamlgraph psq ctypes utop
-# torch presently needs to be built from source.
+# ocaml-torch presently needs to be built from source, alas.
 eval $(opam env --switch=myswitch)
 dune build
-
-# need to install MNIST data
-mkdir -p data
-cd data
-wget https://raw.githubusercontent.com/fgnt/mnist/master/t10k-images-idx3-ubyte.gz
-wget https://raw.githubusercontent.com/fgnt/mnist/master/t10k-labels-idx1-ubyte.gz
-wget https://raw.githubusercontent.com/fgnt/mnist/master/train-images-idx3-ubyte.gz
-wget https://raw.githubusercontent.com/fgnt/mnist/master/train-labels-idx1-ubyte.gz
-# wget http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz
-# wget http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz
-# wget http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz
-# wget http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz
-gunzip train-images-idx3-ubyte.gz
-gunzip train-labels-idx1-ubyte.gz
-gunzip t10k-images-idx3-ubyte.gz
-gunzip t10k-labels-idx1-ubyte.gz
 
 # for accessing remotely:  (e.g.)
 # sshfs -o allow_other,default_permissions ubuntu@104.171.203.63:/home/ubuntu/cortex/ /home/tlh24/remote/
