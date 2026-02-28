@@ -49,7 +49,7 @@ let () =
 				(Cuda.cudnn_is_available ()));
 				
 	(* check similarity database, simdb *)
-	Simdb.test (); 
+	if not !gdebug then Simdb.test ();
 
 	(*let device = Torch.Device.Cpu in*) (* slower *)
 	let device = Torch.Device.cuda_if_available () in

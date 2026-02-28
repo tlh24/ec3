@@ -471,8 +471,8 @@ let get_stats gs =
 (* these functions from program.ml *)
 let parse_with_error lexbuf =
 	let prog = try Some (Parser.parse_prog Lexer.read lexbuf) with
-	| SyntaxError msg -> Printf.printf "SyntaxError %s\n" msg; None
-	| Parser.Error -> None in
+	| SyntaxError msg -> Logs.debug (fun m->m "SyntaxError %s" msg); None
+	| Parser.Error -> Logs.debug (fun m->m "ParserError"); None in
 	prog 
 
 let parse_logo_string s = 

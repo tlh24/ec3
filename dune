@@ -113,7 +113,7 @@
 	(name main)
 	(modules main )
 	(libraries simdb vg vg.cairo vector torch torch.vision logs logs.threaded domainslib sexplib program)
-	(modes exe) ; options: byte exe
+	(modes byte exe) ; options: byte exe; need byte for debugging.
 	)
 
 (executable

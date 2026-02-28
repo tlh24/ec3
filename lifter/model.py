@@ -83,7 +83,7 @@ N_ENC       = N_LAYERS // 2            # 3: blocks that inject 2D PE (image side
 # ILV
 N_ILV    = N_LAYERS - 1    # 5: ILV[l] added before block l, for l = 0 .. N_ILV-1
 N_INF    = 16               # iterative inference passes per batch
-ETA_ILV  = 1e-2            # SGD step size for ILV
+ETA_ILV  = 2e-2            # SGD step size for ILV
 WD_ILV   = 0.1             # manual L2 coefficient applied every ILV step
 L1_ILV   = 1e-4            # L1 coefficient (only if USE_L1=True)
 STD_ILV  = 0.05            # ILV initialisation noise std dev
@@ -478,8 +478,9 @@ class Lifter(nn.Module):
         ilv = self._init_ilv(B, dev, x)
 
         # 2. Iterative ILV optimisation (weights stay frozen) -----------------
-        ilv_loss_v = 0.0
-        for _ in range(self.n_inference):
+        ilv_loss_sta = 0.0
+        ilv_loss_fin = 0.0
+        for u in range(self.n_inference):
             logits = self.forward(x, prog_a, ilv)
             loss   = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
             if self.use_l1:
@@ -492,7 +493,10 @@ class Lifter(nn.Module):
             with torch.no_grad():
                 ilv.data -= self.eta_ilv * (g + self.wd_ilv * ilv.data)
 
-            ilv_loss_v = loss.item()
+            if u == 0: 
+                ilv_loss_sta = loss.item()
+            if u == self.n_inference-1:
+                ilv_loss_fin = loss.item()
 
         # 3. Weight update with ILV held fixed --------------------------------
         ilv_fixed = ilv.detach()
@@ -515,7 +519,8 @@ class Lifter(nn.Module):
             amort_loss_v = a_loss.item()
 
         return {
-            'ilv_loss':    ilv_loss_v,
+            'ilv_loss':    ilv_loss_sta - ilv_loss_fin,
+            # reports how much the loss changes during ILV optimization
             'weight_loss': w_loss.item(),
             'amort_loss':  amort_loss_v,
         }

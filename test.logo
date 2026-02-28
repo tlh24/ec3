@@ -1,8 +1,4 @@
-( pen 1/2 ;
-move 2 / 3 , 0 - 2 ;
-pen 1/2 ;
-move ul / 2 , 0 - 3 / 4 ;
-pen 1/2 ;
-move 2 * 2 , 4 / 5 ;
-pen 2 ;
-move 6 , 0 )
+(
+move 2/3 , 0 - 3/5 ;
+pen 3
+)

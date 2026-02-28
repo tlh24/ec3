@@ -1241,7 +1241,7 @@ let make_moves () =
 
 let init_database steak count = 
 	(* generate 'count' initial program & image pairs *)
-	Logs.info(fun m -> m  "init_database %d" count); 
+	Logs.info(fun m -> m  "init_database count %d" count);
 	let root = "/tmp/ec3/init_database" in
 	let fid = open_out (Printf.sprintf "%s/enumerate.txt" root) in
 	let u = ref 0 in
@@ -1257,11 +1257,11 @@ let init_database steak count =
 			Logs.debug (fun m->m "tryadd imgi:%d i:%d" minde mindex); 
 		); 
 		let s = Logo.output_program_pstr data.pro in
+		(*Logs.debug(fun m -> m
+			"%d: adding [%d] = %s dist %b %f" !iters !u s good dist);*)
 		if good then (
 		(* bug: white image sets distance to 1.0 to [0] *)
 		if dist > 4096.0 then (
-			(*Logs.debug(fun m -> m
-				"%d: adding [%d] = %s" !iters !u s);*)
 			let added,y = db_add_uniq stk data img in
 			if not added then Logs.err (fun m->m "dist %f did not add %s to db" dist s);
 			if added then (
@@ -1319,15 +1319,13 @@ let init_database steak count =
 	in
 
 	let tryadd_fromstr stk str override =
-		(*Logs.debug (fun m->m "tryadd %s" str); *)
-(* 		let sc = if String.length str = 0 then "" else ";" in *)
-		(*let str2 = "(" ^ str ^ sc ^ " )" in*)
+		(*Logs.debug (fun m->m "tryadd_fromstr %s" str);*)
+		let str2 = "(" ^ str ^ " )" in
 		(* make the heading of the turtle visible *)
-(* 		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in *)
-		let str2 = str in
+		(*let sc = if String.length str = 0 then "" else ";" in
+		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in*)
 		let data,img = generate_logo_fromstr str2 in
 		(* data is type Graf.edata *)
-		(*Logs.debug (fun m->m "tryadd %s" str2);*)
 		tryadd stk data img override
 	in
 
@@ -1347,7 +1345,7 @@ let init_database steak count =
 	let r = make_moves () in
 	(* now outer-prod them in a sequence + pen *)
 	let penopts = [|"1";"2";"3";"4"|] 
-		|> Array.map (fun s -> "pen "^s^"; ") in
+		|> Array.map (fun s -> "pen "^s^" ; ") in
 	let r2 = ref [] in
 	for h = 0 to (Array.length penopts)-1 do (
 		let pen = penopts.(h) in
@@ -1372,14 +1370,14 @@ let init_database steak count =
 		while !n < (iof ((foi count) *. 0.15)) do (
 			let k = Random.int (Array.length penopts) in
 			let j = Random.int nra in
-			let s = ra.(j) ^ ";" ^ penopts.(k) in
+			let s = ra.(j) ^ " ; " ^ penopts.(k) in
 			r3 := s :: !r3;
 			incr n
 		) done;
 		while !n < (iof ((foi count) *. 0.33)) do (
 			let k = Random.int (Array.length penopts) in
 			let j = Random.int nra in
-			let s = penopts.(k) ^ ";" ^ ra.(j) in
+			let s = penopts.(k) ^ " ; " ^ ra.(j) in
 			r3 := s :: !r3;
 			incr n
 		) done;
@@ -1389,7 +1387,7 @@ let init_database steak count =
 			let k = Random.int (Array.length penopts) in
 			let y = [| ra.(i); ra.(j); penopts.(k) |] |> permute_array in
 			let s,_ = Array.fold_left (fun (a,m) b -> 
-				(if m<2 then a^b^"; " else a^b),m+1) ("",0) y in
+				(if m<2 then a^b^" ; " else a^b),m+1) ("",0) y in
 			r3 := s :: !r3;
 			incr n
 		) done; 
@@ -1423,15 +1421,16 @@ let init_database steak count =
 	in
 	
 	let rec runbatch stk n = 
-		if n > 3 then stk
+		if n > 1 then stk
 		else (
 			let ra = sub_sample () |> Array.of_list |> permute_array in
 			let ran = Array.length ra in
-			let body i = tryadd_fromstr stk ra.(i) false in
+			Logs.debug (fun m->m "sub_sample returned %d progs" ran);
 			
 			(* moved parallelism into graf.ml *)
 			for i=0 to (ran-1) do
-				body i done;
+				tryadd_fromstr stk ra.(i) false
+			done;
 
 			(* remove unreachable nodes *)
 			Graf.remove_unreachable stk.mutex stk.gs;
@@ -1570,7 +1569,7 @@ let load_database steak fname =
 	;;
 	
 let handle_message steak bd msg =
-	(*Logs.debug (fun m -> m "handle_message %s" msg);*)
+	Logs.debug (fun m -> m "handle_message %s" msg);
 	let msgl = String.split_on_char ':' msg in
 	let cmd = if List.length msgl = 1 then msg 
 		else List.hd msgl in
@@ -1578,9 +1577,11 @@ let handle_message steak bd msg =
 	| "update_batch" -> (
 		(* supervised: sent when python has a working copy of data *)
 		(* dreaming : sent when the model has produced edits (maybe old) *)
-		bigfill_batchd steak bd; 
+		let bea,fresh = reset_bea steak (not steak.superv) in
+		let bd2 = {bd with bea=bea; fresh=fresh} in
+		bigfill_batchd steak bd2;
 		(*Logs.debug(fun m -> m "new batch %d" steak.batchno);*)
-		bd,(Printf.sprintf "ok %d" !nreplace)
+		bd2,(Printf.sprintf "ok %d" !nreplace)
 		)
 	| "decode_edit" -> (
 		(* python sets bd.bedtd -- the dreamed edits *)

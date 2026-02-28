@@ -109,9 +109,9 @@ for u in range(1000):
 	# mo.write_bedtd(y)
 	# if training:
 	# 	mo.write_editdiff(bedts - y.cpu()) # synchronization.
-	socket_client.send_and_receive(message="decode_edit")
+	# socket_client.send_and_receive(message="decode_edit")
   
-	if u % 11 == 0 :
+	if u % 11 == 0 or True:
 		toc = time.time()
 		rate = int((batch_size * 11) / (toc - tic))
 		tic = toc
