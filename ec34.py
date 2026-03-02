@@ -85,7 +85,7 @@ if dreaming:
 # 	return y,q,lossflat
 	
 
-for u in range(1000):
+for u in range(100000):
 	# keep things synchronous for now. 
 	socket_client.send_and_receive(message="update_batch")
 	
@@ -117,12 +117,12 @@ for u in range(1000):
 		tic = toc
 		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; {rate} samp/sec')
 				
-	if u % 1000 == 999 : 
-		if training:
-			model.save_checkpoint()
-		if dreaming:
-			model.load_checkpoint()
-			print("dreamer reloaded model parameters.")
+	# if u % 1000 == 999 :
+	# 	if training:
+	# 		model.save_checkpoint()
+	# 	if dreaming:
+	# 		model.load_checkpoint()
+	# 		print("dreamer reloaded model parameters.")
 	
 
 mo.close()

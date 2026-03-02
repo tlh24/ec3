@@ -111,7 +111,7 @@ let count_edit_types edits =
 	let nins = count_type "ins" in
 	nsub,ndel,nins
 
-let edit_cost edits maxlen =
+(*let edit_cost edits maxlen =
 	(* find the first edit *)
 	let firsted = List.fold_left
 			(fun a (_t,p,_c) ->
@@ -123,9 +123,13 @@ let edit_cost edits maxlen =
 	let cost = edlen +. edpos *. edpos in
 	(*Logs.debug (fun m->m "edit cost %f (%f %f)" cost edlen edpos);*)
 	cost
+	;;*)
+
+let edit_cost edits _ =
+	foi (List.length edits)
 	;;
 	
-let edit_criteria_b edits = 
+(*let edit_criteria_b edits =
 	if List.length edits > 0 && List.length edits <= 6 then (
 		let nsub,ndel,nins = count_edit_types edits in
 		let typ = ref "nul" in
@@ -134,9 +138,10 @@ let edit_criteria_b edits =
 		if ndel > nsub && ndel > nins then typ := "del"; 
 		if nins > nsub && nins > ndel then typ := "ins"; 
 		true,!typ
-	) else false,"nul"
+	) else false,"nul"*)
 	
 let edit_criteria edits maxlen = 
+	(* returns bool good, type of the edits, cost *)
 	if List.length edits > 0 then (
 		let nsub,ndel,nins = count_edit_types edits in
 		let r = ref false in
@@ -152,7 +157,7 @@ let edit_criteria edits maxlen =
 		(*if nsub <= 1 && ndel = 0 && nins <= 3 then r := true;
 		if nsub <= 1 && ndel <= 3 && nins <= 0 then r := true;*)
 		!r,!typ,cost
-	) else false,"",-1.0
+	) else false,"",256.0
 
 let get_edits a_progenc b_progenc = 
 	(* eliminate out-of-criteria distances to save time *)
@@ -528,7 +533,7 @@ let save fname g =
 
 let load gs fname = 
 	(* does *not* render the programs *)
-	Printf.printf "Graf.load %s%!" fname; flush stdout; 
+	Logs.info (fun m->m "Graf.load %s%!" fname);
 	let open Sexplib in
 	let ic = open_in fname in
 	Printf.printf "Parsing Sexps...\n%!"; flush stdout; 
@@ -613,7 +618,7 @@ let load gs fname =
 		| _ -> () (* null entry *)
 		) gs.g; 
 	(* need to go back and fix the edit costs *)
-	(* probably should save the costs to file! *)
+	(* probably should save the costs to file too! *)
 	Array.iteri (fun i d ->
 		match d.progt with
 		| `Equiv
@@ -653,12 +658,13 @@ let dijkstra gs start dbg =
 	dist.(start) <- 0.0;
 	visited.(start) <- true; 
 	let q = SI.fold (fun (i,_,_cnt,cost) a ->
-		dist.(i) <- cost;
+		dist.(i) <- cost *. cost;
 		prev.(i) <- start; 
-		Q.add i cost a
+		Q.add i (cost *. cost) a
 		) d.outgoing Q.empty in
 	if dbg then Logs.debug (fun m->m "psq size %d" (Q.size q));
 	if dbg then Logs.debug (fun m->m "outgoing size %d" (SI.cardinal d.outgoing));
+	Logs.info (fun m->m "Entering Dijkstra, %d nodes" n);
 	
 	let rec dijk qq = 
 		if Q.is_empty qq then ()
@@ -675,11 +681,11 @@ let dijkstra gs start dbg =
 				if dbg then Logs.debug (fun m->m "equivalents size %d" (SI.cardinal e.equivalents));
 				visited.(i) <- true; 
 				let de = dist.(i) in
-				assert( p = de ); 
 				let foldadd set sq = 
 					SI.fold (fun (j,typ,_cnt,cost) a ->
-					if not visited.(j) && typ <> "nul" then (
-						let nd = de +. cost in
+					if not visited.(j) && typ <> "nul" && cost >= 0.0 then (
+						let nd = de +. cost *. cost in (* new distance *)
+						(* cost ^ 2 encourages short edits *)
 						if dist.(j) < 0. then (
 							(* new route *)
 							if dbg then Logs.debug (fun m -> m "new route to %d cost %f" j nd);
@@ -711,8 +717,8 @@ let dijkstra gs start dbg =
 	
 	let rec print_path final step present = 
 		let d = gs.g.(present) in
-		Printf.fprintf fid "final:%d step:%d present:%d %s \n" 
-			final step present (Logo.output_program_pstr d.ed.pro); 
+		Printf.fprintf fid "final:%d step:%d present:%d cost %f %s \n"
+			final step present dist.(present) (Logo.output_program_pstr d.ed.pro);
 		let fname = Printf.sprintf "%s/%d_%d.png" root final step in
 		ignore(Logoext.run_prog (Some d.ed.pro) 64 fname false); 
 		let j = prev.(present) in
@@ -720,9 +726,7 @@ let dijkstra gs start dbg =
 	in
 
 	for i = 0 to 19 do (
-		Printf.fprintf fid "--%d--" i; 
-		let k = Random.int n in
-		print_path k 0 k
+		print_path i 0 i
 	) done; 
 
 	close_out fid; 
