@@ -47,13 +47,13 @@ else:
 	filno = 0
 print(f"batch_size:{batch_size}")
 
-if not os.path.exists(f"editdiff_{filno}.mmap"): 
-	os.system(f'fallocate -l {batch_size*e_indim*4} editdiff_{filno}.mmap')
+if not os.path.exists(f"logits_{filno}.mmap"):
+	os.system(f'fallocate -l {batch_size*p_ctx*64*4} logits_{filno}.mmap')
 
 
 fd_bpro = make_mmf(f"bpro_{filno}.mmap")
 fd_bimg = make_mmf(f"bimg_{filno}.mmap")
-fd_bedts = make_mmf(f"bedts_{filno}.mmap")
+fd_logits = make_mmf(f"logits_{filno}.mmap")
 fd_bedtd = make_mmf(f"bedtd_{filno}.mmap")
 fd_posenc = make_mmf(f"posenc_{filno}.mmap")
 fd_editdiff = make_mmf(f"editdiff_{filno}.mmap")
@@ -71,6 +71,7 @@ fig, axs = plt.subplots(plot_rows, plot_cols, figsize=figsize)
 initialized = False
 im = [ [0]*plot_cols for i in range(plot_rows)]
 cbar = [ [0]*plot_cols for i in range(plot_rows)]
+ov = [ [None]*plot_cols for i in range(plot_rows)]
 
 
 def plot_tensor(r, c, v, name, lo, hi):
@@ -99,7 +100,7 @@ if batch_size > 32:
 while True:
 	bpro = read_mmap(fd_bpro, [batch_size, p_ctx])
 	bimg = read_mmap(fd_bimg, [batch_size, 2, image_res, image_res])
-	bedts = read_mmap(fd_bedts, [batch_size, e_indim])
+	logits = read_mmap(fd_logits, [batch_size, p_ctx//2, 64])
 	bedtd = read_mmap(fd_bedtd, [batch_size, e_indim])
 	posenc = read_mmap(fd_posenc, [p_ctx, poslen])
 	editdiff = read_mmap(fd_editdiff, [batch_size, e_indim])
@@ -109,7 +110,14 @@ while True:
 	img1 = bimg[0,1,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
 	plot_tensor(0, 1, img0, "bimg[0,0,:,:]", -1.0, 1.0)
 	plot_tensor(0, 2, img1, "bimg[0,1,:,:]", -1.0, 1.0)
-	plot_tensor(1, 0, bedts[:bs,:], "{sub,del,ins,fin}|{Char[30]}|{Posenc}|bedts[:,:]", -2.0, 2.0)
+	plot_tensor(1, 0, logits[0,:, :30].T, "model logits", 0.0, 1.0)
+	prog_slice = bpro[0, :logits.shape[1]].numpy()
+	xs = np.arange(len(prog_slice))
+	if ov[1][0] is None:
+		ov[1][0], = axs[1,0].plot(xs, prog_slice, 'o', markersize=7,
+			markerfacecolor='white', markeredgecolor='black', markeredgewidth=1.5)
+	else:
+		ov[1][0].set_data(xs, prog_slice)
 	plot_tensor(1, 1, bedtd[:bs,:], "bedtd[:,:]", -2.0, 2.0)
 	plot_tensor(1, 2, editdiff[:bs,:], "editdiff", -2.0, 2.0) # brighter colors
 	

@@ -1359,7 +1359,7 @@ let init_database steak count =
 	
 	(* for longer sequences, we need to sub-sample *)
 	let sub_sample () = 
-		let penopts = [|"0";"1";"2";"3";"4"|] 
+		let penopts = [|"1";"2";"3";"4"|]
 			|> Array.map (fun s -> "pen "^s) in
 		let r3 = ref [] in
 		let ra = Array.of_list r in
@@ -1399,8 +1399,8 @@ let init_database steak count =
 			let y = [| ra.(i); penopts.(l); ra.(j); ra.(k); |] |> permute_array in
 			let s,_ = Array.fold_left (fun (a,m) b -> 
 				(if m<3 then a^b^"; " else a^b),m+1) ("",0) y in
-			let s2 = "pen 0 ;"^s in
-			r3 := s2 :: !r3; 
+			(*let s2 = "pen 0 ;"^s in
+			r3 := s2 :: !r3;*)
 			incr n
 		) done;
 		while !n < count do (
@@ -1413,8 +1413,8 @@ let init_database steak count =
 					|> permute_array in
 			let s,_ = Array.fold_left (fun (a,m) b -> 
 				(if m<4 then a^b^"; " else a^b),m+1) ("",0) y in
-			let s2 = "pen 0 ;"^s in
-			r3 := s2 :: !r3; 
+			(*let s2 = "pen 0 ;"^s in
+			r3 := s2 :: !r3;*)
 			incr n
 		) done;
 		!r3

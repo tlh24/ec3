@@ -501,8 +501,9 @@ class Lifter(nn.Module):
         # 3. Weight update with ILV held fixed --------------------------------
         ilv_fixed = ilv.detach()
         self.weight_opt.zero_grad()
+        logits = self.forward(x, prog_a, ilv_fixed)
         w_loss = F.cross_entropy(
-            self.forward(x, prog_a, ilv_fixed).reshape(-1, VOCAB), prog_b.reshape(-1)
+            logits.reshape(-1, VOCAB), prog_b.reshape(-1)
         )
         w_loss.backward()
         self.weight_opt.step()
@@ -518,7 +519,7 @@ class Lifter(nn.Module):
             self.amort_opt.step()
             amort_loss_v = a_loss.item()
 
-        return {
+        return logits, {
             'ilv_loss':    ilv_loss_sta - ilv_loss_fin,
             # reports how much the loss changes during ILV optimization
             'weight_loss': w_loss.item(),
@@ -548,6 +549,31 @@ class Lifter(nn.Module):
             ilv[:, :self.n_amort].add_(self.amort_net(x))
             return self.forward(x, prog_a.long(), ilv)
         return self.forward(x, prog_a.long(), ilv=None)
+
+    # -------------------------------------------------------------------------
+    def save_checkpoint(self, path: str, step: Optional[int] = None) -> None:
+        """Save model weights and optimiser states to a checkpoint file."""
+        checkpoint = {
+            'model_state':      self.state_dict(),
+            'weight_opt_state': self.weight_opt.state_dict(),
+            'step':             step,
+        }
+        if self.use_amort and self.amort_opt is not None:
+            checkpoint['amort_opt_state'] = self.amort_opt.state_dict()
+        torch.save(checkpoint, path)
+
+    # -------------------------------------------------------------------------
+    def load_checkpoint(self, path: str) -> Optional[int]:
+        """
+        Load model weights and optimiser states from a checkpoint file.
+        Returns the saved step (or None if not present).
+        """
+        checkpoint = torch.load(path, map_location='cpu', weights_only=True)
+        self.load_state_dict(checkpoint['model_state'])
+        self.weight_opt.load_state_dict(checkpoint['weight_opt_state'])
+        if self.use_amort and self.amort_opt is not None and 'amort_opt_state' in checkpoint:
+            self.amort_opt.load_state_dict(checkpoint['amort_opt_state'])
+        return checkpoint.get('step')
 
     # -------------------------------------------------------------------------
     def flops_per_forward(self) -> int:

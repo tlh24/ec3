@@ -64,12 +64,14 @@ class MemmapOrchestrator(object):
 		):
 		self.fd_bpro = make_mmf(f"bpro_{mmapno}.mmap")
 		self.fd_bimg = make_mmf(f"bimg_{mmapno}.mmap")
+		self.fd_logits = make_mmf(f"logits_{mmapno}.mmap")
 
 		# Create partial functions for reading data with the specified dimensions
 		self.read_bpro = partial(self.read_mmap, self.fd_bpro,
 										[batch_size, p_ctx])
 		self.read_bimg = partial(self.read_mmap, self.fd_bimg,
 										[batch_size, 2, image_res, image_res])
+		self.write_logits = partial(self.write_mmap, self.fd_logits)
 
 	def read_mmap(self, mmf, dims):
 		mmf.seek(0)
@@ -89,3 +91,4 @@ class MemmapOrchestrator(object):
 	def close(self):
 		self.fd_bpro.close()
 		self.fd_bimg.close()
+		self.fd_logits.close()

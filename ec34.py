@@ -1,5 +1,6 @@
 import torch as th
 from torch import nn, optim
+import torch.nn.functional as F
 import torch.cuda.amp
 import time
 import argparse
@@ -50,15 +51,8 @@ model = Lifter(use_l1=False, use_amort=False)
 model.count_params()
 
 from os.path import exists
-fname = "checkpoints/lifter_checkpoint.ptx"
-if exists(fname): 
-	loaded_dict = torch.load(fname)
-	model.load_state_dict(loaded_dict)
-	print(f"loaded {fname}")
-else: 
-	if exists("ec34.ptx"):
-		loaded_dict = torch.load("ec34.ptx")
-		model.load_state_dict(loaded_dict)
+if exists("ec34.pt"):
+	model.load_checkpoint("ec34.pt")
 
 model.to('cuda')
 
@@ -97,7 +91,7 @@ for u in range(100000):
 		x = bimg.cuda()
 		# add some noise to discourage sensitivity
 		x = x + th.poisson(th.ones_like(x)) / 12 # perceptually, looks ok.
-		lossdict = model.train_step(bimg.cuda(), bpro.cuda())
+		y, lossdict = model.train_step(bimg.cuda(), bpro.cuda())
  
 		weight_loss = lossdict["weight_loss"]
 		ilv_loss = lossdict["ilv_loss"]
@@ -106,7 +100,7 @@ for u in range(100000):
 		losslog.write("\n")
 		losslog.flush()
 	
-	# mo.write_bedtd(y)
+	mo.write_logits(F.softmax(y, -1))
 	# if training:
 	# 	mo.write_editdiff(bedts - y.cpu()) # synchronization.
 	# socket_client.send_and_receive(message="decode_edit")
@@ -117,12 +111,12 @@ for u in range(100000):
 		tic = toc
 		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; {rate} samp/sec')
 				
-	# if u % 1000 == 999 :
-	# 	if training:
-	# 		model.save_checkpoint()
-	# 	if dreaming:
-	# 		model.load_checkpoint()
-	# 		print("dreamer reloaded model parameters.")
+	if u % 100 == 99 :
+		if training:
+			model.save_checkpoint("ec34.pt")
+		if dreaming:
+			model.load_checkpoint("ec34.pt")
+			print("dreamer reloaded model parameters.")
 	
 
 mo.close()
