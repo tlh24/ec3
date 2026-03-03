@@ -83,7 +83,7 @@ N_ENC       = N_LAYERS // 2            # 3: blocks that inject 2D PE (image side
 # ILV
 N_ILV    = N_LAYERS - 1    # 5: ILV[l] added before block l, for l = 0 .. N_ILV-1
 N_INF    = 16               # iterative inference passes per batch
-ETA_ILV  = 2e-2            # SGD step size for ILV
+ETA_ILV  = 5e-2            # SGD step size for ILV
 WD_ILV   = 0.1             # manual L2 coefficient applied every ILV step
 L1_ILV   = 1e-4            # L1 coefficient (only if USE_L1=True)
 STD_ILV  = 0.05            # ILV initialisation noise std dev
