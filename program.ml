@@ -56,7 +56,9 @@ type batchd = (* batch data structure *)
 				Bigarray.Array2.t (* btch , p_ctx *)
 	; bimg : (float, Bigarray.float32_elt, Bigarray.c_layout) 
 				Bigarray.Array3.t (* btch*3, image_res, image_res *)
-	; bedts : (float, Bigarray.float32_elt, Bigarray.c_layout) 
+	; logits : (float, Bigarray.float32_elt, Bigarray.c_layout)
+				Bigarray.Array3.t (* btch , p_ctx/2, 64 *)
+	; bedts : (float, Bigarray.float32_elt, Bigarray.c_layout)
 				Bigarray.Array2.t (* btch , e_indim - supervised *)
 	; bedtd : (float, Bigarray.float32_elt, Bigarray.c_layout) 
 				Bigarray.Array2.t (* btch , e_indim - decode *)
@@ -181,6 +183,10 @@ let bigarray2_of_tensor m =
 	
 let tensor_of_bigarray2 m device =
 	let o = Tensor.of_bigarray (Bigarray.genarray_of_array2 m) in
+	o |> Tensor.to_device ~device
+
+let tensor_of_bigarray3 m device =
+	let o = Tensor.of_bigarray (Bigarray.genarray_of_array3 m) in
 	o |> Tensor.to_device ~device
 	
 let tensor_of_bigarray1 img = 
@@ -344,36 +350,13 @@ let make_training steak =
 	(* only start from terminal nodes, to avoid redundancy *)
 	let terminal = Array.make (Array.length dist) false in
 	Array.iteri (fun i d -> if d >= 0.0 then terminal.(i) <- true) dist;
+	(* remove all nodes that are pointed to in prev *)
 	Array.iter (fun p -> if p >= 0 then terminal.(p) <- false) prev;
 
 	let (_,training) = Array.fold_left (fun (k,lst) term ->
 		if term then (
 			let l = make_devlist [] k in
 			print_devlist k l ;
-
-			(* this would probably be simpler with nested for-loops
-				but ohwell, let's do it the ocaml way *)
-			(*let rec select_c acc ll a b =
-				if List.length ll > 0 then (
-					let c = List.hd ll in
-					select_c ((a,b,c) :: acc) (List.tl ll) a b
-				) else acc
-			in
-
-			let select_bc acc ll a =
-				if List.length ll > 0 then (
-					let b = List.hd ll in
-					select_c acc ll a b
-				) else acc
-			in
-
-			let rec select_abc acc ll =
-				if List.length ll >= 2 then (
-					let a = List.hd ll in
-					let aacc = select_bc acc (List.tl ll) a in
-					select_abc aacc (List.tl ll)
-				) else acc
-			in*)
 
 			let rec select_ab acc ll =
 				if List.length ll >= 2 then (
@@ -438,8 +421,7 @@ let new_batche_train steak dt bi =
 	let b = steak.gs.g.(post) in
 	let _,edits,_ = Graf.get_edits a.ed.progenc b.ed.progenc in
 	if bi = 0 then (
-		Logs.debug (fun m->m "new_batche_train edit count %d \n\t%d %s \n\t%d %s"
-			(List.length edits)
+		Logs.info (fun m->m "new_batche_train %d %s\t%d %s"
 			pre (progenc2str a.ed.progenc) post (progenc2str b.ed.progenc))
 	); 
 	let edited = Array.make (p_ctx/2) 0.0 in
@@ -581,50 +563,46 @@ let decode_edit_enumerate steak ba_edit =
 		-- for each batch element
 		& decide what to do with them. *)
 
-let sample_dist x = 
-	(* sample a discrete decoding from the weightings along dim 1 *)
+let sample_logits x =
+	(* sample a discrete decoding from the weightings along dim 2 *)
 	(* assumes batch is dim 0 *)
-	let bs,n = Tensor.shape2_exn x in
-	let y = Tensor.clamp x ~min:(Scalar.float 0.0) ~max:(Scalar.float 1e6) in
-	let mx = Tensor.amax y ~dim:[1] ~keepdim:true in
-	let z = Tensor.( exp(y / mx) - (f 1.0) ) (*could be another nonlinearity*)
-			|> Tensor.cumsum  ~dim:1 ~dtype:(T Float) in
-	(* this will de facto be sorted, so lo and hi are easy *)
-	let hi = Tensor.narrow z ~dim:1 ~start:(n-1) ~length:1 in
-	let r = Tensor.( (rand_like hi) * hi ) 
-			|> Tensor.expand ~implicit:true ~size:[bs;n] in
+	let bs,n,vs = Tensor.shape3_exn x in (* batch_size, ntok, vocab_size *)
+	(* x is softmaxed in python before sending here, so will be a probability *)
+	let z = Tensor.cumsum x ~dim:2 ~dtype:(T Float) in
+	let hi = Tensor.narrow z ~dim:2 ~start:(vs-1) ~length:1 in
+	let r = Tensor.( (rand_like hi) * hi)
+		|> Tensor.expand ~implicit:true ~size:[bs;n;vs] in
 	let msk = Tensor.( (gt_tensor z r) + (f 0.001) ) in (* cast to float *)
-	Tensor.argmax msk ~dim:1 ~keepdim:false
+	Tensor.argmax msk ~dim:2 ~keepdim:false
 	(* argmax returns the first index if all are equal (as here) *)
 
-let sample_dist_dum x = 
-	Tensor.argmax x ~dim:1 ~keepdim:false
+let sample_logits_dum x =
+	Tensor.argmax x ~dim:2 ~keepdim:false
 		
-let decode_edit ?(sample=true) ba_edit = 
+let decode_logits ?(sample=true) ba_logits =
 	(* decode model output (from python) *)
 	(* default is to sample the distribution; 
 		set sample to false for argmax decoding. *)
-	let sta = Unix.gettimeofday () in
 	let device = Torch.Device.Cpu in
-	let m = tensor_of_bigarray2 ba_edit device in
-	(* typ = th.argmax(y[:,0:4], 1)  (0 is the batch dim) *)
-	(* stochastic decoding through sample_dist *)
-	let sfun = if sample then sample_dist else sample_dist_dum in
-	let typ = sfun (Tensor.narrow m ~dim:1 ~start:0 ~length:4) in 
-	let chr = sfun (Tensor.narrow m ~dim:1 ~start:4 ~length:toklen) in
-	let pos = Tensor.narrow m ~dim:1 ~start:(5+toklen) ~length:1 in
-	let edit_arr = Array.init !batch_size (fun i -> 
-		let etyp = match Tensor.get_int1 typ i with
-			| 0 -> "sub"
-			| 1 -> "del" 
-			| 2 -> "ins"
-			| _ -> "fin" in
-		let echr = (Tensor.get_int1 chr i) + Char.code('0') |> Char.chr in
-		let eloc = Tensor.get_float1 pos i |> Float.round |> int_of_float in
-		(etyp,eloc,echr) ) in
-	let fin = Unix.gettimeofday () in
-	if !gdisptime then Logs.debug (fun m -> m "decode_edit time %f" (fin-.sta)); 
-	edit_arr
+	let m = tensor_of_bigarray3 ba_logits device in
+	(* logits has both program A and B; remove first half *)
+	let bs,ntok,_ = Tensor.shape3_exn m in
+	let rec remove_negten = function
+		| -10 :: tl -> remove_negten tl
+		| l -> l
+	in
+	let tensor_to_progarr mm =
+		(* stochastic decoding through sample_logits *)
+		let p = if sample then sample_logits mm
+				else sample_logits_dum mm in
+		Array.init bs (fun i ->
+			Array.init ntok (fun j ->
+				(Tensor.get_int2 p i j) - 10
+			) |> Array.to_list
+			|> List.rev |> remove_negten |> List.rev
+			|> Logo.decode_program )
+	in
+	tensor_to_progarr m
 	
 let apply_edits be ed = 
 	(* apply after (of course) sending to python. *)
@@ -793,7 +771,7 @@ module SE = Set.Make(
 		type t = float * string * int * char
 	end )
 	
-let update_bea_mnist steak bd = 
+(*let update_bea_mnist steak bd =
 	(*Logs.debug (fun m -> m "entering update_bea_mnist");*) 
 	let ba_prob, ba_typ, ba_chr, ba_pos = 
 		decode_edit_enumerate steak bd.bedtd in
@@ -983,7 +961,7 @@ let update_bea_mnist steak bd =
 	(*Mutex.lock steak.mutex;
 	Gc.major (); (* clean up torch variables (slow..) *)
 	Mutex.unlock steak.mutex*)
-	;;
+	;;*)
 
 let bigfill_batchd steak bd = 
 	let sta = Unix.gettimeofday () in
@@ -1151,6 +1129,8 @@ let init_batchd steak superv =
 	let fd_bimg,bimg = mmap_bigarray3 (mkfnam "bimg") 
 			(!batch_size*2) image_res image_res in
 			(* note: needs a reshape on python side!! *)
+	let fd_logits,logits = mmap_bigarray3 (mkfnam "logits")
+			(!batch_size) (p_ctx/2) 64 in
 	(* supervised batch of edits: ocaml to python *)
 	let fd_bedts,bedts = mmap_bigarray2 (mkfnam "bedts") 
 			!batch_size e_indim in
@@ -1174,8 +1154,8 @@ let init_batchd steak superv =
 	Bigarray.Array2.fill bedts 0.0 ;
 	Bigarray.Array2.fill bedtd 0.0 ; 
 	(* return batchd struct & list of files to close later *)
-	{bpro; bimg; bedts; bedtd; posenc; bea; fresh}, 
-	[fd_bpro; fd_bimg; fd_bedts; fd_bedtd; fd_posenc]
+	{bpro; bimg; logits; bedts; bedtd; posenc; bea; fresh},
+	[fd_bpro; fd_bimg; fd_logits; fd_bedts; fd_bedtd; fd_posenc]
 	
 let truncate_list n l = 
 	let n = min n (List.length l) in
@@ -1583,13 +1563,14 @@ let handle_message steak bd msg =
 		(*Logs.debug(fun m -> m "new batch %d" steak.batchno);*)
 		bd2,(Printf.sprintf "ok %d" !nreplace)
 		)
-	| "decode_edit" -> (
-		(* python sets bd.bedtd -- the dreamed edits *)
-		(* read this independently of updating bd.bedts; so as to determine acuracy. *)
-		let decode_edit_accuracy edit_arr = 
+	| "decode_logits" -> (
+		(* python sets bd.logits -- the imagined program *)
+		(*let decode_edit_accuracy prog_arr =
+			let correct = ref 0 in
 			let typright, chrright, posright, totsup = 
 					ref 0, ref 0, ref 0, ref 0 in
-			Array.iteri (fun i (typ,pos,chr) -> 
+			Array.iteri (fun i dec_prog ->
+
 				if List.length (bd.bea.(i).edits) > 0 then (
 					let styp,spos,schr = List.hd (bd.bea.(i).edits) in (* supervised *)
 					if typ = styp then incr typright; 
@@ -1599,19 +1580,19 @@ let handle_message steak bd msg =
 				) ) edit_arr ; 
 			if !totsup > 0 then (
 				let pctg v = (foi !v) /. (foi !totsup) in
-				Logs.debug (fun m -> m (* TODO: debug mode *)
-					"decode_edit: correct typ \027[31m%0.3f\027[0m chr \027[31m%0.3f\027[0m pos \027[31m%0.3f\027[0m " 
-					(pctg typright) (pctg chrright) (pctg posright) )
+				Logs.info (fun m -> m
+					"decode_logits: correct \027[31m%0.3f\027[0m "
+					(pctg typright) )
 			);
-		in
+		in*)
 		(* always check! *)
-		let edit_dream = decode_edit ~sample:false bd.bedtd in
-		decode_edit_accuracy edit_dream; 
+		let pb_arr = decode_logits ~sample:false bd.logits in
+		Logs.info (fun m->m "decode logits %s" pb_arr.(0));
 		
 		if steak.superv then 
 			update_bea_train steak bd
 		else
-			update_bea_mnist steak bd ; 
+			() (*update_bea_mnist steak bd*) ;
 		
 		bd, "ok" )
 	| _ -> bd,"Unknown command"

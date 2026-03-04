@@ -294,8 +294,7 @@ let decode_ast_struct ss qq =
 	conv tree
 
 let decode_program il = 
-	(* convert a program encoded as a list of ints to a string, 
-	and then to the ast *)
+	(* convert a program encoded as an int list to a string *)
 	let sl = List.map dec_item il in
 	List.fold_left (fun a b -> a^b) "" sl 
 	(* parse in calling fun, via lexer and parser *)

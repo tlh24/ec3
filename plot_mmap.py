@@ -1,39 +1,13 @@
-import math
-import mmap
 import numpy as np
 import torch as th
 import argparse
 import matplotlib.pyplot as plt
-from ctypes import * # for c_char
-import time
 import os
+from data_exchange import MemmapOrchestrator
 
 from constants import *
 # remove menubar buttons
 plt.rcParams['toolbar'] = 'None'
-
-def make_mmf(fname): 
-	fd = open(fname, "r+b")
-	return mmap.mmap(fd.fileno(), 0)
-
-def read_mmap(mmf, dims): 
-	mmf.seek(0)
-	mmb = mmf.read()
-	# siz = len(mmb)
-	siz = math.prod(dims) * 4
-	mmb2 = (c_char * siz).from_buffer_copy(mmb)
-	x = th.frombuffer(mmb2, dtype=th.float).clone()
-	x = th.reshape(x, dims)
-	return x
-	
-def write_mmap(mmf, data): 
-	buff = io.BytesIO()
-	torch.save(data, buff)
-	buff.seek(0)
-	mmf.seek(0)
-	n = mmf.write(buff.read())
-	return n
-
 
 parser = argparse.ArgumentParser(description='image mmaped files')
 parser.add_argument("-b", "--batch_size", help="Set the batch size", type=int)
@@ -41,22 +15,10 @@ parser.add_argument("-d", "--dreaming", help="Set the model to dream", action="s
 args = parser.parse_args()
 batch_size = args.batch_size
 g_dreaming = args.dreaming
-if args.dreaming: 
-	filno = 1
-else: 
-	filno = 0
+filno = 1 if args.dreaming else 0
 print(f"batch_size:{batch_size}")
 
-if not os.path.exists(f"logits_{filno}.mmap"):
-	os.system(f'fallocate -l {batch_size*p_ctx*64*4} logits_{filno}.mmap')
-
-
-fd_bpro = make_mmf(f"bpro_{filno}.mmap")
-fd_bimg = make_mmf(f"bimg_{filno}.mmap")
-fd_logits = make_mmf(f"logits_{filno}.mmap")
-fd_bedtd = make_mmf(f"bedtd_{filno}.mmap")
-fd_posenc = make_mmf(f"posenc_{filno}.mmap")
-fd_editdiff = make_mmf(f"editdiff_{filno}.mmap")
+mo = MemmapOrchestrator(filno, p_ctx, batch_size, image_res)
 
 
 # fallocate -l 6016 editdiff_0.mmap for batch size 32
@@ -98,12 +60,13 @@ if batch_size > 32:
 	bs = 32
 
 while True:
-	bpro = read_mmap(fd_bpro, [batch_size, p_ctx])
-	bimg = read_mmap(fd_bimg, [batch_size, 2, image_res, image_res])
-	logits = read_mmap(fd_logits, [batch_size, p_ctx//2, 64])
-	bedtd = read_mmap(fd_bedtd, [batch_size, e_indim])
-	posenc = read_mmap(fd_posenc, [p_ctx, poslen])
-	editdiff = read_mmap(fd_editdiff, [batch_size, e_indim])
+	bpro     = mo.read_bpro()
+	bpro_hold = mo.read_bpro_hold()
+	bimg     = mo.read_bimg()
+	logits   = mo.read_logits()
+	bedtd    = mo.read_bedtd()
+	posenc   = mo.read_posenc()
+	editdiff = mo.read_editdiff()
 
 	plot_line(0, 0, bpro[0,:], "bpro[0,:,:]")
 	img0 = bimg[0,0,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
@@ -111,11 +74,11 @@ while True:
 	plot_tensor(0, 1, img0, "bimg[0,0,:,:]", -1.0, 1.0)
 	plot_tensor(0, 2, img1, "bimg[0,1,:,:]", -1.0, 1.0)
 	plot_tensor(1, 0, logits[0,:, :30].T, "model logits", 0.0, 1.0)
-	prog_slice = bpro[0, :logits.shape[1]].numpy()
+	prog_slice = bpro_hold[0, p_ctx//2:].numpy()
 	xs = np.arange(len(prog_slice))
 	if ov[1][0] is None:
-		ov[1][0], = axs[1,0].plot(xs, prog_slice, 'o', markersize=7,
-			markerfacecolor='white', markeredgecolor='black', markeredgewidth=1.5)
+		ov[1][0], = axs[1,0].plot(xs, prog_slice, 'o', markersize=6,
+			markerfacecolor='white', markeredgecolor='black', markeredgewidth=1.0)
 	else:
 		ov[1][0].set_data(xs, prog_slice)
 	plot_tensor(1, 1, bedtd[:bs,:], "bedtd[:,:]", -2.0, 2.0)

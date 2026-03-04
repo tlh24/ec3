@@ -8,7 +8,7 @@ import os
 from data_exchange import SocketClient, MemmapOrchestrator
 # from recognizer.model import Recognizer
 from lifter.model import Lifter
-# import wandb
+import pdb
 
 
 parser = argparse.ArgumentParser(description='Transformer-based program synthesizer')
@@ -46,7 +46,7 @@ th.set_default_device('cuda')
 th.set_float32_matmul_precision('high') # desktop.
 
 
-model = Lifter(use_l1=False, use_amort=False)
+model = Lifter(use_l1=False, use_amort=True)
 
 model.count_params()
 
@@ -101,15 +101,14 @@ for u in range(100000):
 		losslog.flush()
 	
 	mo.write_logits(F.softmax(y, -1))
-	# if training:
-	# 	mo.write_editdiff(bedts - y.cpu()) # synchronization.
-	# socket_client.send_and_receive(message="decode_edit")
+	mo.write_bpro_hold(bpro)
+	socket_client.send_and_receive(message="decode_logits")
   
 	if u % 11 == 0 or True:
 		toc = time.time()
 		rate = int((batch_size * 11) / (toc - tic))
 		tic = toc
-		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; {rate} samp/sec')
+		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; amort_loss {100*amort_loss:0.5f} {rate} samp/sec')
 				
 	if u % 100 == 99 :
 		if training:

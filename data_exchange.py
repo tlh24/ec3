@@ -1,8 +1,11 @@
 import socket
 import mmap
+import math
+import os
 import torch as th
 from ctypes import c_char
 from functools import partial
+from constants import e_indim, poslen
 
 class SocketClient:
 	"""
@@ -47,8 +50,12 @@ class SocketClient:
 		self.sock.close()
 
 
-# Function to create a memory-mapped file
-def make_mmf(fname): 
+# Create a memory-mapped file, fallocating it first if it doesn't exist.
+# dims is a list of float32 tensor dimensions used to compute the byte size.
+def make_mmf(fname, dims):
+	nbytes = math.prod(dims) * 4  # float32
+	if not os.path.exists(fname):
+		os.system(f'fallocate -l {nbytes} {fname}')
 	fd = open(fname, "r+b")
 	return mmap.mmap(fd.fileno(), 0)
 
@@ -62,16 +69,40 @@ class MemmapOrchestrator(object):
 		batch_size : int,
 		image_res : int,
 		):
-		self.fd_bpro = make_mmf(f"bpro_{mmapno}.mmap")
-		self.fd_bimg = make_mmf(f"bimg_{mmapno}.mmap")
-		self.fd_logits = make_mmf(f"logits_{mmapno}.mmap")
 
-		# Create partial functions for reading data with the specified dimensions
-		self.read_bpro = partial(self.read_mmap, self.fd_bpro,
-										[batch_size, p_ctx])
-		self.read_bimg = partial(self.read_mmap, self.fd_bimg,
-										[batch_size, 2, image_res, image_res])
-		self.write_logits = partial(self.write_mmap, self.fd_logits)
+		self.fd_bpro      = make_mmf(f"bpro_{mmapno}.mmap",\
+			[batch_size, p_ctx])
+		self.fd_bpro_hold = make_mmf(f"bpro_hold_{mmapno}.mmap",\
+			[batch_size, p_ctx])
+		self.fd_bimg      = make_mmf(f"bimg_{mmapno}.mmap",\
+			[batch_size, 2, image_res, image_res])
+		self.fd_logits    = make_mmf(f"logits_{mmapno}.mmap",\
+			[batch_size, p_ctx // 2, 64])
+		self.fd_bedtd     = make_mmf(f"bedtd_{mmapno}.mmap",\
+			[batch_size, e_indim])
+		self.fd_posenc    = make_mmf(f"posenc_{mmapno}.mmap",\
+			[p_ctx, poslen])
+		self.fd_editdiff  = make_mmf(f"editdiff_{mmapno}.mmap",\
+			[batch_size, e_indim])
+
+		# Create partial functions for reading/writing with fixed shapes
+		self.read_bpro       = partial(self.read_mmap, self.fd_bpro,
+		                               [batch_size, p_ctx])
+		self.read_bpro_hold  = partial(self.read_mmap, self.fd_bpro_hold,
+		                               [batch_size, p_ctx])
+		self.write_bpro_hold = partial(self.write_mmap, self.fd_bpro_hold)
+		self.read_bimg       = partial(self.read_mmap, self.fd_bimg,
+		                               [batch_size, 2, image_res, image_res])
+		# logits: model outputs prog_B tokens only, so shape is [B, p_ctx//2, 64]
+		self.read_logits     = partial(self.read_mmap, self.fd_logits,
+		                               [batch_size, p_ctx // 2, 64])
+		self.write_logits    = partial(self.write_mmap, self.fd_logits)
+		self.read_bedtd      = partial(self.read_mmap, self.fd_bedtd,
+		                               [batch_size, e_indim])
+		self.read_posenc     = partial(self.read_mmap, self.fd_posenc,
+		                               [p_ctx, poslen])
+		self.read_editdiff   = partial(self.read_mmap, self.fd_editdiff,
+		                               [batch_size, e_indim])
 
 	def read_mmap(self, mmf, dims):
 		mmf.seek(0)
@@ -90,5 +121,9 @@ class MemmapOrchestrator(object):
 
 	def close(self):
 		self.fd_bpro.close()
+		self.fd_bpro_hold.close()
 		self.fd_bimg.close()
 		self.fd_logits.close()
+		self.fd_bedtd.close()
+		self.fd_posenc.close()
+		self.fd_editdiff.close()
