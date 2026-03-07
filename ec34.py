@@ -7,7 +7,7 @@ import argparse
 import os
 from data_exchange import SocketClient, MemmapOrchestrator
 # from recognizer.model import Recognizer
-from lifter.model import Lifter
+from lifter.model import ForwardGraphics, InverseGraphics, CombinedModel
 import pdb
 
 
@@ -45,16 +45,18 @@ th.cuda.set_device(torch_device)
 th.set_default_device('cuda')
 th.set_float32_matmul_precision('high') # desktop.
 
+inv = InverseGraphics()
+fwd = ForwardGraphics()
+model = CombinedModel(inv, fwd)
 
-model = Lifter(use_l1=False, use_amort=True)
-
-model.count_params()
+inv.count_params()
+fwd.count_params()
 
 from os.path import exists
 if exists("ec34.pt"):
 	model.load_checkpoint("ec34.pt")
 
-model.to('cuda')
+model.to('cuda') # does this call to() on the internal models?
 
 	
 scaler = torch.amp.GradScaler('cuda')
@@ -66,17 +68,6 @@ if training:
 if dreaming:
 	print("dreaming...")
 	torch. set_grad_enabled(False)
-
-# compiling this does not seem to work... 
-# def train(mod, bimg, bpro, bedts):
-# 	model.zero_grad()
-# 	y,q = model(u, bimg, bpro)
-# 	loss = lossfunc_mse(y, bedts)
-# 	lossflat = th.sum(loss)
-# 	lossflat.backward()
-# 	th.nn.utils.clip_grad_norm_(model.parameters(), 0.025)
-# 	optimizer.step()
-# 	return y,q,lossflat
 	
 
 for u in range(100000):
@@ -91,24 +82,25 @@ for u in range(100000):
 		x = bimg.cuda()
 		# add some noise to discourage sensitivity
 		x = x + th.poisson(th.ones_like(x)) / 12 # perceptually, looks ok.
-		y, lossdict = model.train_step(bimg.cuda(), bpro.cuda())
- 
-		weight_loss = lossdict["weight_loss"]
-		ilv_loss = lossdict["ilv_loss"]
-		amort_loss = lossdict["amort_loss"]
-		losslog.write(f"{u}\t{weight_loss}\t{ilv_loss}\t{amort_loss}")
+		y, img_b_recon, lossdict = model.train_step(bimg.cuda(), bpro.cuda())
+
+		ce_loss = lossdict["ce_loss"]
+		recon_loss = lossdict["recon_loss"]
+		total_loss = lossdict["total_loss"]
+		losslog.write(f"{u}\t{ce_loss}\t{recon_loss}")
 		losslog.write("\n")
 		losslog.flush()
 	
 	mo.write_logits(F.softmax(y, -1))
 	mo.write_bpro_hold(bpro)
+	mo.write_bimg_recon(img_b_recon)
 	socket_client.send_and_receive(message="decode_logits")
   
 	if u % 11 == 0 or True:
 		toc = time.time()
 		rate = int((batch_size * 11) / (toc - tic))
 		tic = toc
-		print(f'{u} weight_loss: {weight_loss:.5f}; ilv_loss {ilv_loss:.5f}; amort_loss {100*amort_loss:0.5f} {rate} samp/sec')
+		print(f'{u} ce_loss: {ce_loss:.5f}; recon_loss {recon_loss:.5f}; {rate} samp/sec')
 				
 	if u % 100 == 99 :
 		if training:

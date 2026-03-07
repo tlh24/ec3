@@ -84,6 +84,8 @@ class MemmapOrchestrator(object):
 			[p_ctx, poslen])
 		self.fd_editdiff  = make_mmf(f"editdiff_{mmapno}.mmap",\
 			[batch_size, e_indim])
+		self.fd_bimg_recon = make_mmf(f"bimg_recon_{mmapno}.mmap",\
+			[batch_size, image_res, image_res])
 
 		# Create partial functions for reading/writing with fixed shapes
 		self.read_bpro       = partial(self.read_mmap, self.fd_bpro,
@@ -103,6 +105,9 @@ class MemmapOrchestrator(object):
 		                               [p_ctx, poslen])
 		self.read_editdiff   = partial(self.read_mmap, self.fd_editdiff,
 		                               [batch_size, e_indim])
+		self.read_bimg_recon  = partial(self.read_mmap, self.fd_bimg_recon,
+		                                [batch_size, image_res, image_res])
+		self.write_bimg_recon = partial(self.write_mmap, self.fd_bimg_recon)
 
 	def read_mmap(self, mmf, dims):
 		mmf.seek(0)
@@ -127,3 +132,4 @@ class MemmapOrchestrator(object):
 		self.fd_bedtd.close()
 		self.fd_posenc.close()
 		self.fd_editdiff.close()
+		self.fd_bimg_recon.close()

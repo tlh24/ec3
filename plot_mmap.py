@@ -64,9 +64,8 @@ while True:
 	bpro_hold = mo.read_bpro_hold()
 	bimg     = mo.read_bimg()
 	logits   = mo.read_logits()
-	bedtd    = mo.read_bedtd()
-	posenc   = mo.read_posenc()
-	editdiff = mo.read_editdiff()
+	posenc     = mo.read_posenc()
+	bimg_recon = mo.read_bimg_recon()
 
 	plot_line(0, 0, bpro[0,:], "bpro[0,:,:]")
 	img0 = bimg[0,0,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
@@ -81,8 +80,7 @@ while True:
 			markerfacecolor='white', markeredgecolor='black', markeredgewidth=1.0)
 	else:
 		ov[1][0].set_data(xs, prog_slice)
-	plot_tensor(1, 1, bedtd[:bs,:], "bedtd[:,:]", -2.0, 2.0)
-	plot_tensor(1, 2, editdiff[:bs,:], "editdiff", -2.0, 2.0) # brighter colors
+	plot_tensor(1, 2, bimg_recon[0,:,:], "bimg_b_recon[0]", -1.0, 1.0)
 	
 	fig.tight_layout()
 	fig.canvas.draw()
