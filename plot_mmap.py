@@ -21,14 +21,12 @@ print(f"batch_size:{batch_size}")
 mo = MemmapOrchestrator(filno, p_ctx, batch_size, image_res)
 
 
-# fallocate -l 6016 editdiff_0.mmap for batch size 32
-# 6016 = 32 * 47 * 4
-
-
 plot_rows = 2
 plot_cols = 3
 figsize = (16, 9)
 plt.ion()
+plt.rcParams['font.size'] = 16
+plt.rcParams['figure.dpi'] = 72
 fig, axs = plt.subplots(plot_rows, plot_cols, figsize=figsize)
 initialized = False
 im = [ [0]*plot_cols for i in range(plot_rows)]

@@ -7,10 +7,12 @@ import time
 # remove menubar buttons
 plt.rcParams['toolbar'] = 'None'
 
-plot_rows = 2
-plot_cols = 4
+plot_rows = 1
+plot_cols = 2
 figsize = (16, 9)
 plt.ion()
+plt.rcParams['font.size'] = 16
+plt.rcParams['figure.dpi'] = 72
 fig, ax = plt.subplots(plot_rows, plot_cols, figsize=figsize)
 initialized = False
 
@@ -21,26 +23,19 @@ while True:
 	data = np.array(data)
 	data = data.astype(float)
 
-	ax[0,0].cla()
-	ax[0,0].plot(data[:,0], np.log(data[:, 1]), 'b')
-	ax[0,0].set(xlabel='iteration')
-	ax[0,0].set_title('log loss')
+	ax[0].cla()
+	ax[0].plot(data[:,0], np.log(data[:, 1]), 'k')
+	ax[0].set(xlabel='iteration')
+	ax[0].set_title('ce loss')
 
-	labels = ["VisionTransformer out","ViT_to_Prog (linear layer) output","ProgramTransformer in","cat ViT;PrT dim=1","ProgramTransformer out","edit output"]
-	for i in range(7): 
-		r = (i+1) // 4
-		c = (i+1) % 4
-		ax[r,c].cla()
-		ax[r,c].plot(data[:,0], data[:,i+2], 'b')
-		if i < 6: 
-			lab = labels[i]
-			ax[r,c].set_title(f'st.dev {lab}')
-		else: 
-			ax[r,c].set_title(f'number of replacements')
+	ax[1].cla()
+	ax[1].plot(data[:,0], np.log(data[:, 2]), 'k')
+	ax[1].set(xlabel='iteration')
+	ax[1].set_title('pixel mse loss')
 
 	fig.tight_layout()
 	fig.canvas.draw()
 	fig.canvas.flush_events()
-	time.sleep(0.2)
+	time.sleep(1)
 	print("tick")
 	#plt.show()

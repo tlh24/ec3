@@ -20,3 +20,4 @@ clean:
 	dune clean
 	rm -f *.S
 	rm -f *.gexf
+	rm -f *.mmap

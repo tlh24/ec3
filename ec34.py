@@ -25,7 +25,7 @@ print(f"batch_size:{batch_size}")
 print(f"dreaming:{dreaming}")
 
 # setup the socket client and handshake with the server.
-socket_client = SocketClient(dreaming)
+socket_client = SocketClient(False)
 socket_client.connect()
 # socket_client.handshake() -- not needed anymore!  April 27 2023
 
@@ -67,7 +67,7 @@ if training:
 	print("training...")
 if dreaming:
 	print("dreaming...")
-	torch. set_grad_enabled(False)
+	torch.set_grad_enabled(False)
 	
 
 for u in range(100000):
@@ -81,13 +81,22 @@ for u in range(100000):
 		model.zero_grad()
 		x = bimg.cuda()
 		# add some noise to discourage sensitivity
-		x = x + th.poisson(th.ones_like(x)) / 12 # perceptually, looks ok.
-		y, img_b_recon, lossdict = model.train_step(bimg.cuda(), bpro.cuda())
+		x = x + th.poisson(th.ones_like(x)) / 24 # perceptually, looks ok.
+		y, img_b_recon, lossdict = model.train_step(x, bpro.cuda())
 
 		ce_loss = lossdict["ce_loss"]
 		recon_loss = lossdict["recon_loss"]
 		total_loss = lossdict["total_loss"]
 		losslog.write(f"{u}\t{ce_loss}\t{recon_loss}")
+		losslog.write("\n")
+		losslog.flush()
+	else:
+		x = bimg.cuda()
+		y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 10)
+
+		ce_loss_pre = lossdict["ce_loss_pre"]
+		ce_loss_post = lossdict["ce_loss_post"]
+		losslog.write(f"{u}\t{ce_loss_pre}\t{ce_loss_post}")
 		losslog.write("\n")
 		losslog.flush()
 	
@@ -96,11 +105,14 @@ for u in range(100000):
 	mo.write_bimg_recon(img_b_recon)
 	socket_client.send_and_receive(message="decode_logits")
   
-	if u % 11 == 0 or True:
+	if u % 11 == 0 :
 		toc = time.time()
 		rate = int((batch_size * 11) / (toc - tic))
 		tic = toc
-		print(f'{u} ce_loss: {ce_loss:.5f}; recon_loss {recon_loss:.5f}; {rate} samp/sec')
+		if training:
+			print(f'{u} ce_loss: {ce_loss:.5f}; recon_loss {recon_loss:.5f}; {rate} samp/sec')
+		else:
+			print(f'{u} ce_loss_pre: {ce_loss_pre:.5f}; ce_loss_post {ce_loss_post:.5f}; {rate} samp/sec')
 				
 	if u % 100 == 99 :
 		if training:

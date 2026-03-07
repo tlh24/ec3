@@ -54,7 +54,7 @@ from typing import Dict, Optional, Tuple
 # Transformer
 N_LAYERS = 6
 N_HEADS  = 4
-D_MODEL  = 256
+D_MODEL  = 128
 D_FF	 = D_MODEL * 4
 
 # Task geometry
@@ -85,7 +85,7 @@ D_CLEAN = D_MODEL - D_SPE   # 224: SPE-free dims for unembedding
 N_ENC   = N_LAYERS // 2	 # 3
 
 # Optimisers
-LR_W   = 1e-4
+LR_W   = 1e-5
 WD_W   = 0.01
 LR_FWD = 1e-3
 WD_FWD = 0.01
@@ -617,20 +617,22 @@ class CombinedModel(nn.Module):
 	@torch.no_grad()
 	def predict(self,
 				x:	  torch.Tensor,
-				prog_a: torch.Tensor,
+				y: torch.Tensor,
 				k_inf:  Optional[int] = None) -> torch.Tensor:
 		"""
 		Iterative inference — no ground-truth prog_b required.
 
 		Args:
 			x:	  [B, 2, H, W]   float32 grayscale images
-			prog_a: [B, N_PROG_A]  int64   ground-truth program A
+			y: [B, 96]		int64	y[:,:48] = prog_A, y[:,48:] = prog_B
 			k_inf:  iteration count (default: self.k_inf)
 
 		Returns logits [B, N_PROG_B, VOCAB].
 		"""
 		self.inv.eval()
 		self.fwd.eval()
+		prog_a = y[:, :N_PROG_A].long()
+		prog_b = y[:, N_PROG_A:].long()
 		B, dev = x.shape[0], x.device
 		K = k_inf if k_inf is not None else self.k_inf
 
@@ -644,12 +646,15 @@ class CombinedModel(nn.Module):
 
 		# Pass 0: inv sees img_b with no latent info yet
 		logits = self.inv(img_a_32, img_b_32, prog_a)
+		ce_loss_pre = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
+
 		for _ in range(K):
-			img_b_fwd = self.fwd(self.fwd.embed_soft(logits))
-			img_b_32  = self._compose_img32(x[:, 1], img_b_fwd)
+			img_b_recon = self.fwd(self.fwd.embed_soft(logits))
+			img_b_32  = self._compose_img32(x[:, 1], img_b_recon)
 			logits	= self.inv(img_a_32, img_b_32, prog_a)
 
-		return logits
+		ce_loss_post = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
+		return logits, img_b_recon[:,0].detach(), {'ce_loss_pre': ce_loss_pre.item(), 'ce_loss_post': ce_loss_post.item()}
 
 	# -------------------------------------------------------------------------
 	def save_checkpoint(self, path: str, step: Optional[int] = None) -> None:
