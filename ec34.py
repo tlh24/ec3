@@ -90,7 +90,8 @@ for u in range(100000):
 		losslog.write("\n")
 		losslog.flush()
 	else:
-		for k in range(10):
+		for k in range(1, 10):
+			print(f'model.predict( .. {k})')
 			y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), k)
 			mo.write_logits(F.softmax(y, -1))
 			mo.write_bpro_hold(bpro)
