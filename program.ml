@@ -1589,10 +1589,10 @@ let handle_message steak bd msg =
 		let pb_arr = decode_logits ~sample:false bd.logits in
 		Logs.info (fun m->m "decode logits %s" pb_arr.(0));
 		
-		if steak.superv then 
+		(*if steak.superv then
 			update_bea_train steak bd
 		else
-			() (*update_bea_mnist steak bd*) ;
+			() (*update_bea_mnist steak bd*) ;*)
 		
 		bd, "ok" )
 	| _ -> bd,"Unknown command"
