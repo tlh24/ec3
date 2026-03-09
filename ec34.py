@@ -91,7 +91,7 @@ for u in range(100000):
 		losslog.flush()
 	else:
 		for k in range(10):
-			y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 10)
+			y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), k)
 			mo.write_logits(F.softmax(y, -1))
 			mo.write_bpro_hold(bpro)
 			mo.write_bimg_recon(img_b_recon)
