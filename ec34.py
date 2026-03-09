@@ -18,7 +18,7 @@ args = parser.parse_args()
 batch_size = args.batch_size
 dreaming = args.dreaming
 training = not dreaming
-mmapno = 1 if dreaming else 0
+mmapno = 0
 
 
 print(f"batch_size:{batch_size}")
@@ -67,7 +67,6 @@ if training:
 	print("training...")
 if dreaming:
 	print("dreaming...")
-	torch.set_grad_enabled(False)
 	
 
 for u in range(100000):
@@ -76,12 +75,12 @@ for u in range(100000):
 	
 	bpro = mo.read_bpro()
 	bimg = mo.read_bimg()
+	x = bimg.cuda()
 	
 	if training:
 		model.zero_grad()
-		x = bimg.cuda()
 		# add some noise to discourage sensitivity
-		x = x + th.poisson(th.ones_like(x)) / 24 # perceptually, looks ok.
+		x = x + th.poisson(th.ones_like(x)) / 20 # perceptually, looks ok.
 		y, img_b_recon, lossdict = model.train_step(x, bpro.cuda())
 
 		ce_loss = lossdict["ce_loss"]
@@ -91,9 +90,7 @@ for u in range(100000):
 		losslog.write("\n")
 		losslog.flush()
 	else:
-		x = bimg.cuda()
 		y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 10)
-
 		ce_loss_pre = lossdict["ce_loss_pre"]
 		ce_loss_post = lossdict["ce_loss_post"]
 		losslog.write(f"{u}\t{ce_loss_pre}\t{ce_loss_post}")

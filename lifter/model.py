@@ -616,7 +616,7 @@ class CombinedModel(nn.Module):
 	# -------------------------------------------------------------------------
 	@torch.no_grad()
 	def predict(self,
-				x:	  torch.Tensor,
+				x: torch.Tensor,
 				y: torch.Tensor,
 				k_inf:  Optional[int] = None) -> torch.Tensor:
 		"""
