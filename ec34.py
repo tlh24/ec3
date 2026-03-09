@@ -90,7 +90,13 @@ for u in range(100000):
 		losslog.write("\n")
 		losslog.flush()
 	else:
-		y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 10)
+		for k in range(10):
+			y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 10)
+			mo.write_logits(F.softmax(y, -1))
+			mo.write_bpro_hold(bpro)
+			mo.write_bimg_recon(img_b_recon)
+			socket_client.send_and_receive(message="decode_logits")
+			time.sleep(0.5)
 		ce_loss_pre = lossdict["ce_loss_pre"]
 		ce_loss_post = lossdict["ce_loss_post"]
 		losslog.write(f"{u}\t{ce_loss_pre}\t{ce_loss_post}")
