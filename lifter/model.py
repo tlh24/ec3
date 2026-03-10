@@ -556,7 +556,8 @@ class CombinedModel(nn.Module):
 	# -------------------------------------------------------------------------
 	def train_step(self,
 				   x: torch.Tensor,
-				   y: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+				   y: torch.Tensor,
+				   forward_only: bool) -> Tuple[torch.Tensor, Dict[str, float]]:
 		"""
 		Joint training step.
 
@@ -585,13 +586,17 @@ class CombinedModel(nn.Module):
 		)
 
 		# (3) Iterative refinement — fully unrolled, gradients through all K passes
-		for _ in range(self.k_inf):
-			logits	= self.inv(img_a_32, img_b_32, prog_a)	   # [B, 48, VOCAB]
-			img_b_fwd = self.fwd(self.fwd.embed_soft(logits))	  # [B, 32, H, W]
-			img_b_32  = self._compose_img32(x[:, 1], img_b_fwd)
+		if not forward_only:
+			for _ in range(self.k_inf):
+				logits	= self.inv(img_a_32, img_b_32, prog_a)	   # [B, 48, VOCAB]
+				img_b_fwd = self.fwd(self.fwd.embed_soft(logits))	  # [B, 32, H, W]
+				img_b_32  = self._compose_img32(x[:, 1], img_b_fwd)
 
-		# (4) Joint loss
-		ce_loss = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
+			# (4) Joint loss
+			ce_loss = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
+		else:
+			ce_loss = torch.zeros(1)
+			logits = torch.zeros(B, 48, VOCAB)
 
 		# Reconstruction: fwd should recover ch-0 pixels from ground-truth progs.
 		# img_a_fwd already in graph; fresh pass needed for prog_b (loop used soft).
@@ -604,7 +609,8 @@ class CombinedModel(nn.Module):
 		self.inv.weight_opt.zero_grad()
 		self.fwd.opt.zero_grad()
 		total_loss.backward()
-		self.inv.weight_opt.step()
+		if not forward_only:
+			self.inv.weight_opt.step()
 		self.fwd.opt.step()
 
 		return logits, img_b_recon[:, 0].detach(), {

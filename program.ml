@@ -4,6 +4,7 @@ open Logo
 open Ast
 open Torch
 open Graf
+open Boundedsetqueue
 
 let nreplace = ref 0 (* number of replacements during hallucinations *)
 let glive = ref true 
@@ -31,9 +32,6 @@ type batche = (* batch edit structure, aka 'be' variable*)
 	; c_progenc : string (* program being edited *)
 	; a_imgi : int
 	; b_imgi : int
-	; edits : (string*int*char) list (* supervised *)
-	; edited : float array (* tell python which chars have been changed*)
-	; count : int (* count & cap total # of edits *)
 	; dt : dreamt
 	}
 	
@@ -45,9 +43,6 @@ let nulbatche =
 	; c_progenc = ""
 	; a_imgi = 0
 	; b_imgi = 0
-	; edits = []
-	; edited = [| 0.0 |]
-	; count = 0 
 	; dt = `Train
 	}
 	
@@ -94,6 +89,7 @@ type tsteak = (* thread state *)
 	{ device : Torch.Device.t
 	; gs : Graf.gstat
 	; sdb : Simdb.imgdb
+	; badlogo : BSQ.t (* bounded set queue of invalid logo programs *)
 	; mnist : Tensor.t 
 	; mnist_cpu : Tensor.t 
 	(*; vae : Vae.VAE.t (* GPU *)*)
@@ -131,7 +127,7 @@ let progenc2str progenc =
 
 let progenc_to_edata progenc =
 	let progstr = progenc2str progenc in
-	let g = parse_logo_string progstr in
+	let g,_ = parse_logo_string progstr in
 	match g with
 	| Some g2 -> (
 		let pd = Graf.pro_to_edata_opt g2 image_res in
@@ -419,12 +415,10 @@ let new_batche_train steak dt bi =
 	let (pre,post) = steak.training.(i) in
 	let a = steak.gs.g.(pre) in
 	let b = steak.gs.g.(post) in
-	let _,edits,_ = Graf.get_edits a.ed.progenc b.ed.progenc in
 	if bi = 0 then (
 		Logs.info (fun m->m "new_batche_train %d %s\t%d %s"
 			pre (progenc2str a.ed.progenc) post (progenc2str b.ed.progenc))
 	); 
-	let edited = Array.make (p_ctx/2) 0.0 in
 	{ a_pid = pre
 	; b_pid = post
 	; a_progenc = a.ed.progenc
@@ -432,11 +426,44 @@ let new_batche_train steak dt bi =
 	; c_progenc = b.ed.progenc (* n.b. context *)
 	; a_imgi = a.imgi
 	; b_imgi = b.imgi
-	; edits
-	; edited
-	; count = 0
 	; dt (* dreamt *)
 	}
+
+let new_batche_forward steak dt bi =
+	(* make a new batch of data for training the forward model *)
+	let n = Array.length steak.training in
+	let k = BSQ.length steak.badlogo in
+	let i = Random.int (n+k) in
+	if i < n then (
+		let (pre,post) = steak.training.(i) in
+		let a = steak.gs.g.(pre) in
+		let b = steak.gs.g.(post) in
+		if bi = 0 then (
+			Logs.info (fun m->m "new_batche_forward %d %s\t%d %s"
+				pre (progenc2str a.ed.progenc) post (progenc2str b.ed.progenc))
+		);
+		{ a_pid = pre
+		; b_pid = post
+		; a_progenc = a.ed.progenc
+		; b_progenc = b.ed.progenc
+		; c_progenc = b.ed.progenc (* n.b. context *)
+		; a_imgi = a.imgi
+		; b_imgi = b.imgi
+		; dt (* dreamt *)
+		}
+	) else (
+		let j = Random.int k in
+		let j2 = Random.int k in
+		{ a_pid = 0
+		; b_pid = 0
+		; a_progenc = BSQ.get steak.badlogo j
+		; b_progenc = BSQ.get steak.badlogo j2
+		; c_progenc = ""
+		; a_imgi = 0 (* maps to the blank image *)
+		; b_imgi = 0
+		; dt (* dreamt *)
+		}
+	)
 
 let rec new_batche_mnist_mse steak bi =
 	(* select a random mnist image *)
@@ -460,7 +487,6 @@ let rec new_batche_mnist_mse steak bi =
 		if bi = 0 then 
 			Logs.debug (fun m->m "new_batche_mnist dist %f ind %d indx %d" 
 			dist ind indx); 
-		let edited = Array.make (p_ctx/2) 0.0 in
 		let root = Editree.make_root a.ed.progenc in
 		let dt = `Mnist(root, []) in
 		{  a_pid = indx; b_pid = mid;
@@ -469,7 +495,7 @@ let rec new_batche_mnist_mse steak bi =
 			c_progenc = a.ed.progenc;
 			a_imgi = a.imgi; 
 			b_imgi = mid; 
-			edits = []; edited; count=0; dt }
+			dt }
 	) else (
 		if bi = 0 then 
 			Logs.debug (fun m->m "new_batche_mnist h %f" dist); 
@@ -477,12 +503,12 @@ let rec new_batche_mnist_mse steak bi =
 	)
 	(* note: bd.fresh is set in the calling function (for consistency) *)
 		
-let new_batche_unsup steak bi =
+(*let new_batche_unsup steak bi =
 	if (Random.int 10) < 10 then ( (* FIXME 5 *)
 		new_batche_train steak `Verify bi
 	) else (
 		new_batche_mnist_mse steak bi
-	)
+	)*)
 	
 (* fixed tensors for enumeration decoding *)
 let decode_edit_tensors batchsiz = 
@@ -604,7 +630,7 @@ let decode_logits ?(sample=true) ba_logits =
 	in
 	tensor_to_progarr m
 	
-let apply_edits be ed = 
+(*let apply_edits be ed =
 	(* apply after (of course) sending to python. *)
 	(* edit length must be > 0 *)
 	(* does not change the edit list! *)
@@ -615,9 +641,9 @@ let apply_edits be ed =
 	ignore(Editree.update_edited 
 		~inplace:true be2.edited ed (String.length c)); 
 	(* inplace is OK: only used in training *)
-	be2
+	be2*)
 	
-let better_counter = Atomic.make 0
+(*let better_counter = Atomic.make 0
 	
 let try_add_program steak data img be = 
 	if true then (
@@ -714,9 +740,9 @@ let try_add_program steak data img be =
 	) ); 
 	!success
 	(* NOTE not sure if we need to call GC here *)
-	(* apparently not? *)
+	(* apparently not? *)*)
 	
-let update_bea_parallel body steak description =
+(*let update_bea_parallel body steak description =
 	let sta = Unix.gettimeofday () in
 	
 	if !gparallel then
@@ -729,9 +755,9 @@ let update_bea_parallel body steak description =
 	let fin = Unix.gettimeofday () in
 	if !gdisptime then Logs.debug (fun m -> m "%s time %f" 
 		description (fin-.sta));
-	steak.batchno <- steak.batchno + 1
+	steak.batchno <- steak.batchno + 1*)
 	
-let update_bea_train steak bd = 
+(*let update_bea_train steak bd =
 	let innerloop_bea_train bi =
 		let be1 = bd.bea.(bi) in
 		(* check edited array allocation *)
@@ -762,7 +788,7 @@ let update_bea_train steak bd =
 		); 
 		bd.bea.(bi) <- bnew
 	in
-	update_bea_parallel innerloop_bea_train steak "update_bea_train"
+	update_bea_parallel innerloop_bea_train steak "update_bea_train"*)
 
 module SE = Set.Make(
 	struct
@@ -1062,7 +1088,7 @@ let bigfill_batchd steak bd =
 			bd.fresh.(u) <- false
 		); 
 	(* - bedts - *) (* supervised *)
-		bd.bedts.{u,0} <- 0.0; (* TEST python synchronization *)
+	(*	bd.bedts.{u,0} <- 0.0; (* TEST python synchronization *)
 		let (typ,pp,c) = if (List.length be.edits) > 0 
 			then List.hd be.edits
 			else ("sub",0,'0') in
@@ -1084,11 +1110,11 @@ let bigfill_batchd steak bd =
 			bd.bedts.{u,5+toklen+0} <- (foi pp);
 			bd.bedts.{u,5+toklen+1} <- (foi pp) /. 3.0;
 			bd.bedts.{u,5+toklen+2} <- (foi pp) /. 9.0;
-			bd.bedts.{u,5+toklen+3} <- (foi pp) /. 27.0
+			bd.bedts.{u,5+toklen+3} <- (foi pp) /. 27.0*)
 			(*for i = 0 to poslen-1 do (
 				bd.bedts.{u,5+toklen+i} <- bd.posenc.{pp,i}
 			) done*)
-		) in (* /innerloop_bigfill_batchd *)
+		in (* /innerloop_bigfill_batchd *)
 	if !gparallel then
 		Dtask.parallel_for steak.pool ~start:0 ~finish:(!batch_size-1)
 			~body:innerloop_bigfill_batchd
@@ -1100,14 +1126,14 @@ let bigfill_batchd steak bd =
 		Logs.debug (fun m -> m "bigfill_batchd time %f" (fin-.sta))
 	;;
 		
-let reset_bea steak dreaming =
+let reset_bea steak forward =
 	(* dt sets the 'mode' of batchd, which persists thru update_bea*)
 	let dt = `Train in
 	(*Printf.printf "\n------- reset_bea:\n"; 
 	Gc.print_stat stdout; *)
 	let bea = Array.init !batch_size
 		(fun i -> 
-			if dreaming then new_batche_unsup steak i
+			if forward then new_batche_forward steak dt i
 			else new_batche_train steak dt i) in
 	let fresh = Array.init !batch_size (fun _i -> true) in
 	(*Printf.printf "\n------- after new_batche:\n"; 
@@ -1120,7 +1146,6 @@ let reset_bea steak dreaming =
 	
 let init_batchd steak superv =
 	Logs.debug (fun m -> m "init_batchd"); 
-	let dreaming = not superv in
 	let filnum = if superv then 0 else 1 in
 	let mkfnam s = 
 		Printf.sprintf "%s_%d.mmap" s filnum in
@@ -1139,7 +1164,7 @@ let init_batchd steak superv =
 			!batch_size e_indim in
 	let fd_posenc,posenc = mmap_bigarray2 (mkfnam "posenc")
 			p_ctx poslen in
-	let bea,fresh = reset_bea steak dreaming in
+	let bea,fresh = reset_bea steak false in
 	(* fill out the posenc matrix *)
 	(* just a diagonal matrix w one-hot! *)
 	for i = 0 to (poslen-1) do (
@@ -1184,7 +1209,7 @@ let rec generate_random_logo res =
 
 let generate_logo_fromstr str = 
 	match parse_logo_string str with
-	| Some pro -> Graf.pro_to_edata pro image_res
+	| Some pro,_ -> Graf.pro_to_edata pro image_res
 	| _ -> Graf.pro_to_edata `Nop image_res
 	
 let permute_array a = 
@@ -1219,27 +1244,22 @@ let make_moves () =
 	List.rev !r
 	;;
 
-let init_database steak count = 
-	(* generate 'count' initial program & image pairs *)
-	Logs.info(fun m -> m  "init_database count %d" count);
+let tryadd stk data img override u fid =
 	let root = "/tmp/ec3/init_database" in
-	let fid = open_out (Printf.sprintf "%s/enumerate.txt" root) in
-	let u = ref 0 in
-	let iters = ref 0 in
-
-	let tryadd stk data img override =
-		let good,dist,minde = if override then true,10000.0,0
+	let good,dist,minde =
+		if override
+			then true,10000.0,0
 			else simdb_dist stk img in
-		(* convert the image index to a program index *)
-		let mindex = stk.gs.img_inv.(minde) in
-		if mindex < 0 then (
-			simdb_to_png stk minde "tryadd_error.png"; 
-			Logs.debug (fun m->m "tryadd imgi:%d i:%d" minde mindex); 
-		); 
-		let s = Logo.output_program_pstr data.pro in
-		(*Logs.debug(fun m -> m
-			"%d: adding [%d] = %s dist %b %f" !iters !u s good dist);*)
-		if good then (
+	(* convert the image index to a program index *)
+	let mindex = stk.gs.img_inv.(minde) in
+	if mindex < 0 then (
+		simdb_to_png stk minde "tryadd_error.png";
+		Logs.debug (fun m->m "tryadd imgi:%d i:%d" minde mindex);
+	);
+	let s = Logo.output_program_pstr data.pro in
+	(*Logs.debug(fun m -> m
+		"%d: adding [%d] = %s dist %b %f" !iters !u s good dist);*)
+	if good then (
 		(* bug: white image sets distance to 1.0 to [0] *)
 		if dist > 4096.0 then (
 			let added,y = db_add_uniq stk data img in
@@ -1249,77 +1269,91 @@ let init_database steak count =
 					(Printf.sprintf "%s/db%05d_.png" root y);
 				simdb_to_png stk stk.gs.g.(y).imgi
 					(Printf.sprintf "%s/db%05d_f.png" root y);
-			); 
-			Printf.fprintf fid "[%d] %s (dist:%f to:%d)\n" y s dist mindex;
-			incr u;
-		) ;
-		if dist < 256.0 then (
-			Logs.debug (fun m->m "tryadd replacement %d %f" mindex dist);
-			(* see if there's a replacement *)
-			let data2 = db_get stk mindex in
-			let c1 = data.pcost in (* progenc_cost  *)
-			let c2 = data2.ed.pcost in
-			if c1 < c2 then (
-				let r = db_replace_equiv stk mindex data img in
-				if r >= 0 then (
-					(*Logs.debug (fun m->m "   distance %f" dist);*)
-					(*Logs.debug(fun m -> m
-					"%d: replacing [%d] = %s ( was %s) dist:%f new [%d]"
-					!iters mindex
-					(Logo.output_program_pstr data.pro)
-					(Logo.output_program_pstr data2.ed.pro) dist r);*)
-					incr u;
-				)
 			);
-			if c1 > c2 then (
-				if (SI.cardinal data2.equivalents) < 16 then (
-					let r = db_add_equiv stk mindex data in
-					(*Logs.debug (fun m->m "   distance %f" dist); *)
+			( match fid with
+			| Some ff -> Printf.fprintf ff "[%d] %s (dist:%f to:%d)\n" y s dist mindex;
+			| _ -> () ) ;
+			incr u; added
+		) else (
+			if dist < 256.0 then (
+				Logs.debug (fun m->m "tryadd replacement %d %f" mindex dist);
+				(* see if there's a replacement *)
+				let data2 = db_get stk mindex in
+				let c1 = data.pcost in (* progenc_cost  *)
+				let c2 = data2.ed.pcost in
+				if c1 < c2 then (
+					let r = db_replace_equiv stk mindex data img in
 					if r >= 0 then (
+						(*Logs.debug (fun m->m "   distance %f" dist);*)
 						(*Logs.debug(fun m -> m
-						"iter %d: added equiv [loc %d] = %s [new loc %d] ( simpler= %s) %s %s same:%b dist:%f"
+						"%d: replacing [%d] = %s ( was %s) dist:%f new [%d]"
 						!iters mindex
-						(Logo.output_program_pstr data.pro) r
-						(Logo.output_program_pstr data2.ed.pro)
-						data.progenc data2.ed.progenc
-						(data.progenc = data2.ed.progenc) dist);*)
-						incr u;
-					)
+						(Logo.output_program_pstr data.pro)
+						(Logo.output_program_pstr data2.ed.pro) dist r);*)
+						incr u; true
+					) else false
+				) else (
+					if (SI.cardinal data2.equivalents) < 16 then (
+						let r = db_add_equiv stk mindex data in
+						(*Logs.debug (fun m->m "   distance %f" dist); *)
+						if r >= 0 then (
+							(*Logs.debug(fun m -> m
+							"iter %d: added equiv [loc %d] = %s [new loc %d] ( simpler= %s) %s %s same:%b dist:%f"
+							!iters mindex
+							(Logo.output_program_pstr data.pro) r
+							(Logo.output_program_pstr data2.ed.pro)
+							data.progenc data2.ed.progenc
+							(data.progenc = data2.ed.progenc) dist);*)
+							incr u; true
+						) else false
+					) else false
 				)
-			);
-		) ; 
-		if dist <= 4096.0 && dist >= 256.0 then (
-			(*Logs.debug (fun m->m "%d: %s reject, dist: %f to: %d" 
+			) else ( (* dist <= 4096 && dist >= 256 *)
+				(*Logs.debug (fun m->m "%d: %s reject, dist: %f to: %d"
 				!iters s dist mindex)*)
+				false
+			)
 		)
-		) else ( (* not good *)
-			(*Logs.debug (fun m->m "%d: dist %f not good: %s %f" !iters dist s data.scost)*)
-		) ; 
-		incr iters
+	) else ( (* not good *)
+		(*Logs.debug (fun m->m "%d: dist %f not good: %s %f" !iters dist s data.scost)*)
+		false
+	)
+	;;
+
+let tryadd_fromstr stk str override u fid =
+	(*Logs.debug (fun m->m "tryadd_fromstr %s" str);*)
+	let str2 = "(" ^ str ^ " )" in
+	(* make the heading of the turtle visible *)
+	(*let sc = if String.length str = 0 then "" else ";" in
+	let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in*)
+	let data,img = generate_logo_fromstr str2 in
+	(* data is type Graf.edata *)
+	tryadd stk data img override u fid
+	;;
+
+let init_database steak count = 
+	(* generate 'count' initial program & image pairs *)
+	Logs.info(fun m -> m  "init_database count %d" count);
+	let root = "/tmp/ec3/init_database" in
+	let fid = open_out (Printf.sprintf "%s/enumerate.txt" root) in
+	let u = ref 0 in
+	let iters = ref 0 in
+
+	let tryadd_fromstr2 str override =
+		ignore(tryadd_fromstr steak str override u (Some fid))
 	in
 
-	let tryadd_fromstr stk str override =
-		(*Logs.debug (fun m->m "tryadd_fromstr %s" str);*)
-		let str2 = "(" ^ str ^ " )" in
-		(* make the heading of the turtle visible *)
-		(*let sc = if String.length str = 0 then "" else ";" in
-		let str2 = "(" ^ str ^ sc ^ " pen 2/9; move 6,0 )" in*)
-		let data,img = generate_logo_fromstr str2 in
-		(* data is type Graf.edata *)
-		tryadd stk data img override
-	in
-
-	tryadd_fromstr steak "" true; (* override *)
-	tryadd_fromstr steak "move 1, 1" false;
-	tryadd_fromstr steak "move 1, 0 - 1" false;
-	tryadd_fromstr steak "move 2, 1" false;
-	tryadd_fromstr steak "move 2, 0 - 1" false;
-	tryadd_fromstr steak "move 3, 1" false;
-	tryadd_fromstr steak "move 3, 0 - 1" false;
-	tryadd_fromstr steak "move 4, 1" false;
-	tryadd_fromstr steak "move 4, 0 - 1" false;
-	tryadd_fromstr steak "move 1, 2" false;
-	tryadd_fromstr steak "move 1, 0 - 2" false;
+	tryadd_fromstr2 "" true; (* override *)
+	tryadd_fromstr2 "move 1, 1" false ;
+	tryadd_fromstr2 "move 1, 0 - 1" false;
+	tryadd_fromstr2 "move 2, 1" false;
+	tryadd_fromstr2 "move 2, 0 - 1" false;
+	tryadd_fromstr2 "move 3, 1" false;
+	tryadd_fromstr2 "move 3, 0 - 1" false;
+	tryadd_fromstr2 "move 4, 1" false;
+	tryadd_fromstr2 "move 4, 0 - 1" false;
+	tryadd_fromstr2 "move 1, 2" false;
+	tryadd_fromstr2 "move 1, 0 - 2" false;
 	(*let y = db_get steak 1 in
 	Logs.debug (fun m->m "y %s" y.ed.progenc);*) 
 	let r = make_moves () in
@@ -1334,7 +1368,7 @@ let init_database steak count =
 	) done; 
 	
 	List.iter (fun s -> 
-		tryadd_fromstr steak s false)
+		tryadd_fromstr2 s false)
 		(r @ !r2) ;
 	
 	(* for longer sequences, we need to sub-sample *)
@@ -1409,7 +1443,7 @@ let init_database steak count =
 			
 			(* moved parallelism into graf.ml *)
 			for i=0 to (ran-1) do
-				tryadd_fromstr stk ra.(i) false
+				tryadd_fromstr2 ra.(i) false
 			done;
 
 			(* remove unreachable nodes *)
@@ -1553,47 +1587,32 @@ let handle_message steak bd msg =
 	let msgl = String.split_on_char ':' msg in
 	let cmd = if List.length msgl = 1 then msg 
 		else List.hd msgl in
-	match cmd with
-	| "update_batch" -> (
-		(* supervised: sent when python has a working copy of data *)
-		(* dreaming : sent when the model has produced edits (maybe old) *)
-		let bea,fresh = reset_bea steak (not steak.superv) in
+	let update_batch forward =
+		let bea,fresh = reset_bea steak forward in
 		let bd2 = {bd with bea=bea; fresh=fresh} in
 		bigfill_batchd steak bd2;
 		(*Logs.debug(fun m -> m "new batch %d" steak.batchno);*)
 		bd2,(Printf.sprintf "ok %d" !nreplace)
-		)
+	in
+	match cmd with
+	| "update_batch_inverse" -> update_batch false;
+	| "update_batch_forward" -> update_batch true;
 	| "decode_logits" -> (
-		(* python sets bd.logits -- the imagined program *)
-		(*let decode_edit_accuracy prog_arr =
-			let correct = ref 0 in
-			let typright, chrright, posright, totsup = 
-					ref 0, ref 0, ref 0, ref 0 in
-			Array.iteri (fun i dec_prog ->
-
-				if List.length (bd.bea.(i).edits) > 0 then (
-					let styp,spos,schr = List.hd (bd.bea.(i).edits) in (* supervised *)
-					if typ = styp then incr typright; 
-					if pos = spos then incr posright; 
-					if chr = schr then incr chrright; 
-					incr totsup; 
-				) ) edit_arr ; 
-			if !totsup > 0 then (
-				let pctg v = (foi !v) /. (foi !totsup) in
-				Logs.info (fun m -> m
-					"decode_logits: correct \027[31m%0.3f\027[0m "
-					(pctg typright) )
-			);
-		in*)
-		(* always check! *)
 		let pb_arr = decode_logits ~sample:false bd.logits in
 		Logs.info (fun m->m "decode logits %s" pb_arr.(0));
-		
-		(*if steak.superv then
-			update_bea_train steak bd
-		else
-			() (*update_bea_mnist steak bd*) ;*)
-		
+		Array.iter (fun pstr ->
+			(* simulate it - is it valid ? *)
+			let _, err = parse_logo_string pstr in
+			if String.length err > 0 then (
+				BSQ.add steak.badlogo pstr ;
+				Logs.info (fun m->m "Added %s to the BadLogo list" pstr);
+			) else (
+				(* try to add it to the graph. *)
+				let u = ref 0 in
+				let added = tryadd_fromstr steak pstr false u None in
+				if added then
+					Logs.info (fun m->m "Added %s to the graph" pstr);
+			)) pb_arr ;
 		bd, "ok" )
 	| _ -> bd,"Unknown command"
 
@@ -1656,6 +1675,8 @@ let servthread steak () = (* steak = thread state *)
 		Logs.debug (fun m -> m "disconnect %d" sockno); 
 		List.iter (fun fd -> close fd) fdlist; 
 		save_database steak "db_improved.S"; 
+		BSQ.save_to_file steak.badlogo "db_badlogo.txt";
+		Logs.info (fun m->m "Saved %d to db_badlogo.txt" (BSQ.length steak.badlogo));
 		Mutex.lock steak.mutex;
 		Gc.full_major (); (* clean up torch variables (slow..) *)
 		Mutex.unlock steak.mutex
@@ -1682,7 +1703,7 @@ let measure_torch_copy_speed device =
 let test_logo () = 
 	let s = "( pen ua ; move 4 - ua , ua ; move 2 - 4 , ul / 2 )" in
 	Printf.printf "%s\n" s ; 
-	let g = parse_logo_string s in
+	let g,_ = parse_logo_string s in
 	match g with
 	| Some g2 -> ( 
 		let ss,qq = encode_ast g2 in

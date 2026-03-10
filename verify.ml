@@ -7,6 +7,7 @@ open Torch
 open Graf*)
 (*open Torch*)
 open Program
+open Boundedsetqueue
 
 let usage_msg = "verify.exe <db_file>"
 let input_files = ref []
@@ -32,6 +33,11 @@ let () =
 	let device = Torch.Device.cuda_if_available () in
 	let gs = Graf.create Constants.all_alloc Constants.image_alloc in
 	let sdb = Simdb.init Constants.image_alloc in
+	let badlogo = if Sys.file_exists "db_badlgo.txt" then (
+		BSQ.load_from_file Constants.image_alloc "db_badlgo.txt"
+	) else (
+		BSQ.create Constants.image_alloc
+	) in
 	let mnist = Torch.Tensor.zeros [2;2] in
 	let mnist_cpu = Torch.Tensor.zeros [2;2] in
 	(*let vae = Vae.dummy_ext () in*)
@@ -45,7 +51,7 @@ let () =
 	let fid_verify = open_out "/tmp/ec3/verify.txt" in
 	
 	let supstak = 
-		{device; gs; sdb; mnist; mnist_cpu; mutex;
+		{device; gs; sdb; badlogo; mnist; mnist_cpu; mutex;
 		superv=true; fid=supfid; fid_verify; batchno=0; pool; de; training} in
 	
 	let fname = if List.length !input_files > 0 then

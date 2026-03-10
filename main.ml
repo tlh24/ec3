@@ -7,6 +7,7 @@ open Graf*)
 open Torch
 open Program
 open Constants
+open Boundedsetqueue
 
 let usage_msg = "program.exe -b <batch_size>"
 let input_files = ref []
@@ -75,6 +76,14 @@ let () =
 
 	let gs = Graf.create all_alloc image_alloc in
 	let sdb = Simdb.init image_alloc in
+
+	let badlogo = if Sys.file_exists "db_badlogo.txt" then (
+		let b = BSQ.load_from_file image_alloc "db_badlogo.txt" in
+		Logs.info (fun m->m "Loaded %d from db_badlogo.txt" (BSQ.length b));
+		b
+	) else (
+		BSQ.create image_alloc
+	) in
 	(*let vae = Vae.dummy_ext () in*)
 	let mutex = Mutex.create () in
 	let pool = Dtask.setup_pool ~num_domains:12 () in 
@@ -86,7 +95,7 @@ let () =
 	let fid_verify = open_out "/tmp/ec3/verify.txt" in
 	
 	let supstak = 
-		{device; gs; sdb; mnist; mnist_cpu; mutex;
+		{device; gs; sdb; badlogo; mnist; mnist_cpu; mutex;
 		superv=true; fid=supfid; fid_verify; batchno=0; pool; de; training} in
 	
 	let supsteak = if Sys.file_exists "db_sorted.S" then ( 

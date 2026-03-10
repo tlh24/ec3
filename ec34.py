@@ -71,17 +71,25 @@ if dreaming:
 
 for u in range(100000):
 	# keep things synchronous for now. 
-	socket_client.send_and_receive(message="update_batch")
 	
 	bpro = mo.read_bpro()
 	bimg = mo.read_bimg()
 	x = bimg.cuda()
 	
 	if training:
+		# one pass of only the forward model
+		socket_client.send_and_receive(message="update_batch_forward")
 		model.zero_grad()
 		# add some noise to discourage sensitivity
-		x = x + th.poisson(th.ones_like(x)) / 20 # perceptually, looks ok.
-		y, img_b_recon, lossdict = model.train_step(x, bpro.cuda())
+		xp = x + th.poisson(th.ones_like(x)) / 20 # perceptually, looks ok.
+		y, img_b_recon, lossdict = model.train_step(xp, bpro.cuda(), True)
+
+		# # now the inverse model as well
+		# socket_client.send_and_receive(message="update_batch_inverse")
+		# model.zero_grad()
+		# # add some noise to discourage sensitivity
+		# xp = x + th.poisson(th.ones_like(x)) / 20 # perceptually, looks ok.
+		# y, img_b_recon, lossdict = model.train_step(xp, bpro.cuda(), False)
 
 		ce_loss = lossdict["ce_loss"]
 		recon_loss = lossdict["recon_loss"]

@@ -85,7 +85,13 @@
 	(modules ast)
 	(libraries logo)
 	)
-	
+
+(library
+	(name boundedsetqueue)
+	(modules boundedsetqueue)
+	(libraries )
+	)
+
 (library
 	(name graf)
 	(modules graf)
@@ -106,7 +112,7 @@
 (library	
 	(name program)
 	(modules program)
-	(libraries constants simdb vg vg.cairo vector torch torch.vision logs logs.threaded domainslib sexplib graf lexer parser logo vgwrapper colors levenshtein ast vae editree logoext)
+	(libraries constants simdb vg vg.cairo vector torch torch.vision logs logs.threaded domainslib sexplib graf lexer parser logo vgwrapper colors levenshtein ast vae editree logoext boundedsetqueue)
 	)
 
 (executable

@@ -475,10 +475,16 @@ let get_stats gs =
 	
 (* these functions from program.ml *)
 let parse_with_error lexbuf =
-	let prog = try Some (Parser.parse_prog Lexer.read lexbuf) with
-	| SyntaxError msg -> Logs.debug (fun m->m "SyntaxError %s" msg); None
-	| Parser.Error -> Logs.debug (fun m->m "ParserError"); None in
-	prog 
+	try
+		let prog = Parser.parse_prog Lexer.read lexbuf in
+		(Some prog, "")
+	with
+	| SyntaxError msg ->
+		Logs.debug (fun m -> m "SyntaxError %s" msg);
+		(None, msg)
+	| Parser.Error ->
+		Logs.debug (fun m -> m "ParserError");
+		(None, "Parse error")
 
 let parse_logo_string s = 
 	let lexbuf = Lexing.from_string s in
@@ -556,8 +562,8 @@ let load gs fname =
 	List.iter (function 
 		| [Sexp.Atom i; Sexp.Atom pt; Sexp.Atom pstr; out; equiv; 
 							Sexp.Atom eqrt; Sexp.Atom gd] -> (
-			let prog = match pstr with
-				| "" -> Some(`Nop)
+			let prog,_ = match pstr with
+				| "" -> Some(`Nop), ""
 				| _ -> parse_logo_string pstr in
 			(match prog with
 			| Some(pro) -> (
