@@ -120,13 +120,8 @@ let bigarray_to_bytes arr =
 	Bytes.init len 
 		(fun i -> Bigarray.Array1.get arr i |> Char.chr)
 
-let progenc2str progenc =
-	progenc |>
-	Logo.string_to_intlist |>
-	Logo.decode_program
-
 let progenc_to_edata progenc =
-	let progstr = progenc2str progenc in
+	let progstr = progenc_to_str progenc in
 	let g,_ = parse_logo_string progstr in
 	match g with
 	| Some g2 -> (
@@ -338,7 +333,7 @@ let make_training steak =
 	let print_devlist k l =
 		List.iteri (fun i j ->
 			let d = db_get steak j in
-			let s = progenc2str d.ed.progenc in
+			let s = progenc_to_str d.ed.progenc in
 			Printf.fprintf fid "terminal [%d] step %d node [%d] %s\n" k i j s;
 		) l
 	in
@@ -417,7 +412,7 @@ let new_batche_train steak dt bi =
 	let b = steak.gs.g.(post) in
 	if bi = 0 then (
 		Logs.info (fun m->m "new_batche_train %d %s\t%d %s"
-			pre (progenc2str a.ed.progenc) post (progenc2str b.ed.progenc))
+			pre (progenc_to_str a.ed.progenc) post (progenc_to_str b.ed.progenc))
 	); 
 	{ a_pid = pre
 	; b_pid = post
@@ -439,8 +434,8 @@ let new_batche_forward steak dt bi =
 		let a = steak.gs.g.(pre) in
 		let b = steak.gs.g.(post) in
 		if bi = 0 then (
-			Logs.info (fun m->m "new_batche_forward %d %s\t%d %s"
-				pre (progenc2str a.ed.progenc) post (progenc2str b.ed.progenc))
+			Logs.info (fun m->m "new_batche_forward (valid) %d %s\t%d %s"
+				pre (progenc_to_str a.ed.progenc) post (progenc_to_str b.ed.progenc))
 		);
 		{ a_pid = pre
 		; b_pid = post
@@ -454,10 +449,16 @@ let new_batche_forward steak dt bi =
 	) else (
 		let j = Random.int k in
 		let j2 = Random.int k in
-		{ a_pid = 0
-		; b_pid = 0
-		; a_progenc = BSQ.get steak.badlogo j
-		; b_progenc = BSQ.get steak.badlogo j2
+		let a_progenc = BSQ.get steak.badlogo j in
+		let b_progenc = BSQ.get steak.badlogo j2 in
+		if bi = 0 then (
+			Logs.info (fun m->m "new_batche_forward (badlogo) %d %s\t%d %s"
+				j (progenc_to_str a_progenc) j2 (progenc_to_str b_progenc))
+		);
+		{ a_pid = -10
+		; b_pid = -10
+		; a_progenc
+		; b_progenc
 		; c_progenc = ""
 		; a_imgi = 0 (* maps to the blank image *)
 		; b_imgi = 0
@@ -608,11 +609,13 @@ let sample_logits_dum x =
 let decode_logits ?(sample=true) ba_logits =
 	(* decode model output (from python) *)
 	(* default is to sample the distribution; 
-		set sample to false for argmax decoding. *)
+		set sample to false for argmax decoding.
+		returns a batched intlist *)
 	let device = Torch.Device.Cpu in
 	let m = tensor_of_bigarray3 ba_logits device in
 	(* logits has both program A and B; remove first half *)
 	let bs,ntok,_ = Tensor.shape3_exn m in
+	(* need to remove trailing zeros *)
 	let rec remove_negten = function
 		| -10 :: tl -> remove_negten tl
 		| l -> l
@@ -621,12 +624,17 @@ let decode_logits ?(sample=true) ba_logits =
 		(* stochastic decoding through sample_logits *)
 		let p = if sample then sample_logits mm
 				else sample_logits_dum mm in
+		let bs',ntok' = Tensor.shape2_exn p in
+		assert (bs = bs');
+		assert (ntok = ntok');
+		(*Logs.info (fun m->m "%s" (Tensor.to_string p ~line_size:120));*)
 		Array.init bs (fun i ->
 			Array.init ntok (fun j ->
 				(Tensor.get_int2 p i j) - 10
-			) |> Array.to_list
+			)
+			|> Array.to_list
 			|> List.rev |> remove_negten |> List.rev
-			|> Logo.decode_program )
+		)
 	in
 	tensor_to_progarr m
 	
@@ -662,8 +670,8 @@ let try_add_program steak data img be =
 		let c1 = data.pcost in
 		let c2 = data2.ed.pcost in
 		if c1 < c2 then (
-			let progstr = progenc2str data.progenc in
-			let progstr2 = progenc2str data2.ed.progenc in
+			let progstr = progenc_to_str data.progenc in
+			let progstr2 = progenc_to_str data2.ed.progenc in
 			let r = db_replace_equiv steak mindex data img in
 			if r >= 0 then (
 				let root = "/tmp/ec3/replace_verify" in
@@ -703,9 +711,9 @@ let try_add_program steak data img be =
 			|> Tensor.float_value in
 		if cb < ab then (
 			let data2 = db_get steak mindex in
-			let progstr = progenc2str data.progenc in
-			let progstr2 = progenc2str data2.ed.progenc in
-			let progstr3 = progenc2str be.a_progenc in
+			let progstr = progenc_to_str data.progenc in
+			let progstr2 = progenc_to_str data2.ed.progenc in
+			let progstr3 = progenc_to_str be.a_progenc in
 			let q = Atomic.fetch_and_add better_counter 1 in
 			let root = "/tmp/ec3/mnist_improve" in
 			Logs.info (fun m -> m 
@@ -863,7 +871,7 @@ module SE = Set.Make(
 				Editree.print root [] "" 0.0 ;
 				Logs.debug (fun m -> m "Editree.model_update @%s\n%s:"
 					(Editree.adr2str adr)
-					(Editree.model_index root adr |> Editree.getprogenc |> progenc2str) );
+					(Editree.model_index root adr |> Editree.getprogenc |> progenc_to_str) );
 				List.iteri (fun i (pr,t,p,c) -> 
 					Logs.debug(fun m -> m "  [%d] p:%0.3f %s %d %c"
 						i pr t p c)) eset; 
@@ -880,10 +888,10 @@ module SE = Set.Make(
 					Logs.debug (fun m -> m 
 						"[%d] editree \nc__ %s \nkid %s\nroot%s\nedit %s count %d"
 						bi 
-						(progenc2str be.c_progenc) 
-						(progenc2str k_progenc)
-						(progenc2str (Editree.getprogenc root)) 
-						(* (progenc2str be.a_progenc) same as root *) 
+						(progenc_to_str be.c_progenc)
+						(progenc_to_str k_progenc)
+						(progenc_to_str (Editree.getprogenc root))
+						(* (progenc_to_str be.a_progenc) same as root *)
 						(Array.fold_left (fun a b -> a^(soi (iof b))) "" k_edited) 
 						be.count); 
 					Editree.print root [] "" 0.0
@@ -911,7 +919,7 @@ module SE = Set.Make(
 					) else (
 						if bi = 0 then
 							Logs.debug (fun m->m "not well formed\n %s"
-								(progenc2str k_progenc));
+								(progenc_to_str k_progenc));
 						selec () 
 					) )
 				| false,_ -> (
@@ -938,9 +946,9 @@ module SE = Set.Make(
 				let ea,eb,ec = be3.a_progenc, 
 									be3.b_progenc,
 									be3.c_progenc in
-				let sa,sb,sc = (progenc2str ea), 
-									(progenc2str eb), 
-									(progenc2str ec) in
+				let sa,sb,sc = (progenc_to_str ea),
+									(progenc_to_str eb),
+									(progenc_to_str ec) in
 				let cnt = be3.count in
 				Logs.debug (fun m -> m "\n\ttrue: \027[34m %s [%d] %c\027[0m ; ( i%d b%d ) \n\tdetrm:\027[31m %s [%d] %c\027[0m \n\teditr:\027[32m %s [%d] %c\027[0m cnt:%d \n|a:%s \027[34m %s \027[0m \n|b:%s \027[31m %s \027[0m \n|c:%s \027[32m %s \027[0m"
 							styp sloc schr   steak.batchno bi
@@ -960,9 +968,9 @@ module SE = Set.Make(
 				(* write result to verify.txt; stats later *)
 				let c = if be3.c_progenc = be3.b_progenc then '+' else '-' in
 				Printf.fprintf steak.fid_verify "[%c] from:%s \n      to:%s \n  decode:%s\n" c
-					(progenc2str be3.a_progenc)
-					(progenc2str be3.b_progenc)
-					(progenc2str be3.c_progenc); 
+					(progenc_to_str be3.a_progenc)
+					(progenc_to_str be3.b_progenc)
+					(progenc_to_str be3.c_progenc);
 				flush steak.fid_verify; 
 				if c = '+' then (
 					Graf.incr_good steak.gs be3.a_pid; 
@@ -1076,10 +1084,12 @@ let bigfill_batchd steak bd =
 				be.a_pid be.a_imgi be.b_pid be.b_imgi)); 
 			let aimg = pid_to_ba1 be.a_imgi `Train in
 			let bimg = pid_to_ba1 be.b_imgi be.dt in
+			let a_offset = if be.a_pid = -10 then 0.25 else 0.0 in
+			let b_offset = if be.b_pid = -10 then 0.25 else 0.0 in
 			for i=0 to (image_res-1) do (
 				for j=0 to (image_res-1) do (
-					let aif = (foi aimg.{i*image_res+j}) /. 255.0 in
-					let bif = (foi bimg.{i*image_res+j}) /. 255.0 in
+					let aif = (foi aimg.{i*image_res+j}) /. 255.0 +. a_offset in
+					let bif = (foi bimg.{i*image_res+j}) /. 255.0 +. b_offset in
 					bd.bimg.{2*u+0,i,j} <- aif;
 					bd.bimg.{2*u+1,i,j} <- bif;
 					(*bd.bimg.{3*u+2,i,j} <- aif -. bif; do this in python *)
@@ -1263,7 +1273,7 @@ let tryadd stk data img override u fid =
 		(* bug: white image sets distance to 1.0 to [0] *)
 		if dist > 4096.0 then (
 			let added,y = db_add_uniq stk data img in
-			if not added then Logs.err (fun m->m "dist %f did not add %s to db" dist s);
+			(*if not added then Logs.err (fun m->m "dist %f did not add %s to db" dist s);*)
 			if added then (
 				Logo.segs_to_png data.segs 64
 					(Printf.sprintf "%s/db%05d_.png" root y);
@@ -1541,8 +1551,8 @@ let verify_database steak =
 						let dist,_edits,_ = Graf.get_edits d.ed.progenc e.ed.progenc in
 						Printf.printf " fwd %d -> %d, dist %d \n |%s -> \n |%s\n%!" 
 							i k dist
-							(progenc2str d.ed.progenc) 
-							(progenc2str e.ed.progenc) ; 
+							(progenc_to_str d.ed.progenc)
+							(progenc_to_str e.ed.progenc) ;
 						(*Levenshtein.print_edits edits; -- working*) 
 						(* flip it and do it again *)
 						(*let dist,_edits = Graf.get_edits e.ed.progenc d.ed.progenc in
@@ -1599,13 +1609,15 @@ let handle_message steak bd msg =
 	| "update_batch_forward" -> update_batch true;
 	| "decode_logits" -> (
 		let pb_arr = decode_logits ~sample:false bd.logits in
-		Logs.info (fun m->m "decode logits %s" pb_arr.(0));
-		Array.iter (fun pstr ->
+		Array.iteri (fun i pintlist ->
 			(* simulate it - is it valid ? *)
+			let pstr = Logo.decode_program pb_arr.(i) in
+			if i = 0 then
+				Logs.info (fun m->m "decode logits [%d] %s" i pstr );
 			let _, err = parse_logo_string pstr in
 			if String.length err > 0 then (
-				BSQ.add steak.badlogo pstr ;
-				Logs.info (fun m->m "Added %s to the BadLogo list" pstr);
+				BSQ.add steak.badlogo (Logo.intlist_to_progenc pintlist) ;
+				(*Logs.info (fun m->m "Added %s to the BadLogo list" pstr);*)
 			) else (
 				(* try to add it to the graph. *)
 				let u = ref 0 in

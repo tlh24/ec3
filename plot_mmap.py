@@ -57,6 +57,7 @@ bs = batch_size
 if batch_size > 32: 
 	bs = 32
 
+b = 0
 while True:
 	bpro     = mo.read_bpro()
 	bpro_hold = mo.read_bpro_hold()
@@ -65,20 +66,20 @@ while True:
 	posenc     = mo.read_posenc()
 	bimg_recon = mo.read_bimg_recon()
 
-	plot_line(0, 0, bpro[0,:], "bpro[0,:,:]")
-	img0 = bimg[0,0,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
-	img1 = bimg[0,1,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
-	plot_tensor(0, 1, img0, "bimg[0,0,:,:]", -1.0, 1.0)
-	plot_tensor(0, 2, img1, "bimg[0,1,:,:]", -1.0, 1.0)
-	plot_tensor(1, 0, logits[0,:, :30].T, "model logits", 0.0, 1.0)
-	prog_slice = bpro_hold[0, p_ctx//2:].numpy()
+	plot_line(0, 0, bpro[b,:], f"bpro[{b},:,:]")
+	img0 = bimg[b,0,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
+	img1 = bimg[b,1,:,:] # + np.random.poisson(1, [image_res, image_res]) / 8
+	plot_tensor(0, 1, img0, f"bimg[{b},0,:,:]", -1.0, 1.0)
+	plot_tensor(0, 2, img1, f"bimg[{b},1,:,:]", -1.0, 1.0)
+	plot_tensor(1, 0, logits[b,:, :30].T, f"model logits", 0.0, 1.0)
+	prog_slice = bpro_hold[b, p_ctx//2:].numpy()
 	xs = np.arange(len(prog_slice))
 	if ov[1][0] is None:
 		ov[1][0], = axs[1,0].plot(xs, prog_slice, 'o', markersize=6,
 			markerfacecolor='white', markeredgecolor='black', markeredgewidth=1.0)
 	else:
 		ov[1][0].set_data(xs, prog_slice)
-	plot_tensor(1, 2, bimg_recon[0,:,:], "bimg_b_recon[0]", -1.0, 1.0)
+	plot_tensor(1, 2, bimg_recon[b,:,:], f"bimg_b_recon[{b}]", -1.0, 1.0)
 	
 	fig.tight_layout()
 	fig.canvas.draw()
@@ -86,4 +87,5 @@ while True:
 	# time.sleep(2)
 	print("tick")
 	initialized=True
+	b = (b+1) % bs
 

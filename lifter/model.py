@@ -46,6 +46,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple
+import pdb
 
 # ============================================================================
 # Hyperparameters  — configure here
@@ -601,23 +602,33 @@ class CombinedModel(nn.Module):
 		# Reconstruction: fwd should recover ch-0 pixels from ground-truth progs.
 		# img_a_fwd already in graph; fresh pass needed for prog_b (loop used soft).
 		img_b_recon = self.fwd(self.fwd.embed_hard(prog_b))		# [B, 32, H, W]
-		recon_loss  = (F.mse_loss(img_a_fwd[:, 0], x[:, 0]) +
-					   F.mse_loss(img_b_recon[:, 0], x[:, 1]))
 
-		total_loss = ce_loss + self.lambda_recon * recon_loss
+		recon_loss  = (F.mse_loss(img_a_fwd[:, 0, :, :], x[:, 0, :, :]) +
+					   F.mse_loss(img_b_recon[:, 0, :, :], x[:, 1, :, :]))
 
 		self.inv.weight_opt.zero_grad()
 		self.fwd.opt.zero_grad()
-		total_loss.backward()
-		if not forward_only:
-			self.inv.weight_opt.step()
-		self.fwd.opt.step()
 
-		return logits, img_b_recon[:, 0].detach(), {
-			'ce_loss':    ce_loss.item(),
-			'recon_loss': recon_loss.item(),
-			'total_loss': total_loss.item(),
-		}
+		if not forward_only:
+			total_loss = ce_loss + self.lambda_recon * recon_loss
+			total_loss.backward()
+			self.fwd.opt.step()
+			self.inv.weight_opt.step()
+
+			return logits, img_b_recon[:, 0].detach(), {
+				'ce_loss':    ce_loss.item(),
+				'recon_loss': recon_loss.item(),
+				'total_loss': total_loss.item(),
+			}
+		else: # forward
+			recon_loss.backward()
+			self.fwd.opt.step()
+
+			return logits, img_b_recon[:, 0].detach(), {
+				'ce_loss':    0.0,
+				'recon_loss': recon_loss.item(),
+				'total_loss': recon_loss.item(),
+			}
 
 	# -------------------------------------------------------------------------
 	@torch.no_grad()

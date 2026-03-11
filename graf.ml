@@ -495,7 +495,7 @@ let pro_to_edata pro res =
 	let (_,_,segs) = Logo.eval (Logo.start_state ()) pro in
 	let img,scost = Logo.segs_to_array_and_cost segs res in
 	let _proglst,progaddr = Logo.encode_ast pro in (*!! danger !!*)
-	let progenc = Logo.encode_program pro |> Logo.intlist_to_string in
+	let progenc = Logo.encode_program pro |> Logo.intlist_to_progenc in
 	let pcost = Logo.progenc_cost progenc in
 	{pro; progenc; progaddr; scost; pcost; segs },img
 	

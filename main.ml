@@ -78,11 +78,11 @@ let () =
 	let sdb = Simdb.init image_alloc in
 
 	let badlogo = if Sys.file_exists "db_badlogo.txt" then (
-		let b = BSQ.load_from_file image_alloc "db_badlogo.txt" in
+		let b = BSQ.load_from_file badlogo_alloc "db_badlogo.txt" in
 		Logs.info (fun m->m "Loaded %d from db_badlogo.txt" (BSQ.length b));
 		b
 	) else (
-		BSQ.create image_alloc
+		BSQ.create badlogo_alloc
 	) in
 	(*let vae = Vae.dummy_ext () in*)
 	let mutex = Mutex.create () in

@@ -74,9 +74,36 @@ let dec_item1 i =
 	| 17 -> "c"
 	| 18 -> "pen "
 	| _ -> " "
-	
+
+(*let token_to_int = function
+	| Parser.LEFT_PAREN -> 1
+	| Parser.RIGHT_PAREN -> 2
+	| Parser.COMMA -> 3
+	| Parser.SEMICOLON -> 4
+	| Parser.PLUS -> 5
+	| Parser.MINUS -> 6
+	| Parser.MULT -> 7
+	| Parser.DIVI -> 8
+	| Parser.EQUALS -> 10
+	| Parser.MOVE -> 11
+	| Parser.UNIT_ANGLE -> 12
+	| Parser.UNIT_LENGTH -> 13
+	| Parser.LOOP -> 14
+	| Parser.COLON -> 16
+	| Parser.PEN -> 18
+	| Parser.INT i -> i-10
+	| _ -> 19                (* Catches INT _, EOF, and anything else *)
+
+let token_to_ints = function
+	| Parser.VAR i -> [9; i-10]     (* Encode as [Token_ID; Value] *)
+	| Parser.DEF i -> [15; i-10]
+	| Parser.CALL i ->[17; i-10]
+	| tok -> [token_to_int tok]*)
+
+
 let dec_item i =
 	if i < 0 then 
+		(* integers are encoded with negative numbers, -10 -> 0 *)
 		(string_of_int (i + 10))^" "
 	else
 		dec_item1 i
@@ -149,6 +176,23 @@ let encode_program g =
 	let s = ref [] in
 	enc_prog g s; 
 	List.rev !s
+
+(*let str2intlist str =
+	(* encode a string into integers, [-10 .. 19] *)
+	(* does not parse the program, just lexes *)
+	let lexbuf = Lexing.from_string str in
+	let rec extract_tokens acc =
+		try
+			match Lexer.read lexbuf with
+			| Parser.EOF -> List.rev acc
+			| tok ->
+				(* Appends the list of ints (e.g., [9; 5] for v5) to the accumulator *)
+				let ints = token_to_ints tok in
+				extract_tokens (List.rev_append ints acc)
+		with
+		| Lexer.SyntaxError _ -> List.rev acc
+	in
+	extract_tokens []*)
 	
 let rec enc_ast g s q r = 
 	(* convert a program to int list + int list list addresses. *)
@@ -299,22 +343,30 @@ let decode_program il =
 	List.fold_left (fun a b -> a^b) "" sl 
 	(* parse in calling fun, via lexer and parser *)
 	
-let intlist_to_string e =
+let intlist_to_progenc e =
 	(* convenience encoding -- see asciitable for what it turns to *)
 	let offs = 10 + (Char.code '0') in 
 	(* integers are mapped 1:1, 0 -> [-10] -> '0' *)
 	let cof_int i = Char.chr (i + offs) in
-	let bf = Buffer.create 32 in
+	let bf = Buffer.create 48 in
 	List.iter (fun a -> Buffer.add_char bf (cof_int a)) e;
 	Buffer.contents bf
 	
-let string_to_intlist e = 
-	(* outputs a list, range [-10 17] *)
+let progenc_to_intlist e =
+	(* converts a char-encoded string into an intlist *)
+	(* output is range [-10 17] *)
 	let offs = 10 + (Char.code '0') in
 	String.fold_left (fun a c -> 
 		let i = (Char.code c) - offs in
 		i :: a) [] e
 	|> List.rev 
+
+let progenc_to_str progenc =
+	(* convert a program encoding to human-readable string *)
+	progenc_to_intlist progenc |>
+	decode_program
+
+let intlist_to_str = decode_program
 	
 let output_program_p bf g = (* p is for parseable *)
 	let gl = encode_program g in (* compressed encoding *)
@@ -328,9 +380,6 @@ let output_program_pstr g =
 
 let output_program_plg lg g = 
 	Printf.fprintf lg "%s" (output_program_pstr g;)
-	
-let encode_program_str g = 
-	encode_program g |> intlist_to_string
 	
 let progenc_cost s = 
 	(* to break ties, add a slight bias for lower codes first *)
