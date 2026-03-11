@@ -578,6 +578,8 @@ let load gs fname =
 						| `Uniq -> gs.num_uniq <- gs.num_uniq + 1; (gs.num_uniq - 1)
 						| `Equiv -> gs.num_equiv <- gs.num_equiv + 1; (-1)
 						| _ -> (-1) in
+					(* need to eliminate leading `Seq objects with only one element *)
+
 					let ed,_ = pro_to_edata pro 0 in
 					if progt <> `Np then (
 						let d = {progt; ed; imgi ; outgoing; equivalents; equivroot; good} in
