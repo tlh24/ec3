@@ -112,7 +112,6 @@ for u in range(100000):
 			mo.write_logits(F.softmax(logits, -1))
 			mo.write_bpro_hold(bpro)
 			mo.write_bimg_recon(img_b_recon)
-			socket_client.send_and_receive(message="decode_logits")
 
 		y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 32, report)
 
