@@ -12,6 +12,7 @@ plt.rcParams['toolbar'] = 'None'
 parser = argparse.ArgumentParser(description='image mmaped files')
 parser.add_argument("-b", "--batch_size", help="Set the batch size", type=int)
 parser.add_argument("-d", "--dreaming", help="Set the model to dream", action="store_true")
+parser.add_argument("-c", "--cycle", help="Cycle through the batch index", action="store_true")
 args = parser.parse_args()
 batch_size = args.batch_size
 g_dreaming = args.dreaming
@@ -87,5 +88,6 @@ while True:
 	# time.sleep(2)
 	print("tick")
 	initialized=True
-	b = (b+1) % bs
+	if args.cycle:
+		b = (b+1) % bs
 

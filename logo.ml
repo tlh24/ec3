@@ -569,6 +569,31 @@ let rec eval (st0:state) (pr:prog) =
 	| `Nop -> (st, (false, 0.0), [])
 	) else (st0, (false, 0.0), [])
 
+let rec seq_simplify (pr : prog) : prog =
+	(* remove nested Seq' elements *)
+	match pr with
+	| `Seq (plist, pt) ->
+			let flat_plist = List.concat_map flatten_seq_contents plist in
+			`Seq (flat_plist, pt)
+	| `Var (i, pt) -> `Var (i, pt)
+	| `Const (f, pt) -> `Const (f, pt)
+	| `Nop -> `Nop
+	| `Save (i, p, pt) -> `Save (i, seq_simplify p, pt)
+	| `Move (p1, p2, pt) -> `Move (seq_simplify p1, seq_simplify p2, pt)
+	| `Binop (p1, op, fn, p2, pt) -> `Binop (seq_simplify p1, op, fn, seq_simplify p2, pt)
+	| `Loop (iters, p_cond, p_body, pt) -> `Loop (iters, seq_simplify p_cond, seq_simplify p_body, pt)
+	| `Call (indx, plist, pt) -> `Call (indx, List.map seq_simplify plist, pt)
+	| `Def (i, p, pt) -> `Def (i, seq_simplify p, pt)
+	| `Pen (p, pt) -> `Pen (seq_simplify p, pt)
+and flatten_seq_contents (pr : prog) : prog list =
+	match pr with
+	| `Seq (plist, _pt) ->
+			(* flatten all contents if it is not another type of container *)
+			List.concat_map flatten_seq_contents plist
+	| other ->
+			(* Not a Seq. Just simplify the single node and return it as a 1-element list *)
+			[ seq_simplify other ]
+
 let center_segs l =
 	let rec minimum = function
 		| [] -> assert (false)
@@ -648,4 +673,3 @@ let segs_to_array_and_cost segs res =
 		) done;
 		(o, cost)
 	) else ( nulimg, cost)
-

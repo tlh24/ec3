@@ -94,7 +94,7 @@ for u in range(100000):
 			model.zero_grad()
 			# add some noise to discourage sensitivity
 			xp = x + th.poisson(th.ones_like(x)) / 20 # perceptually, looks ok.
-			y, img_b_recon, lossdict = model.train_step(xp, bpro.cuda(), False)
+			y, img_b_recon, lossdict = model.train_step(xp, bpro.cuda(), False, 4)
 
 		ce_loss = lossdict["ce_loss"]
 		recon_loss = lossdict["recon_loss"]
@@ -103,20 +103,25 @@ for u in range(100000):
 		losslog.write("\n")
 		losslog.flush()
 	else:
-		for k in range(1, 10):
-			print(f'model.predict( .. {k})')
-			y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), k)
-			mo.write_logits(F.softmax(y, -1))
+		socket_client.send_and_receive(message="update_batch_inverse")
+		bpro = mo.read_bpro()
+		bimg = mo.read_bimg()
+		x = bimg.cuda()
+
+		def report(logits, img_b_recon):
+			mo.write_logits(F.softmax(logits, -1))
 			mo.write_bpro_hold(bpro)
 			mo.write_bimg_recon(img_b_recon)
 			socket_client.send_and_receive(message="decode_logits")
-			time.sleep(0.5)
+
+		y, img_b_recon, lossdict = model.predict(x, bpro.cuda(), 32, report)
+
 		ce_loss_pre = lossdict["ce_loss_pre"]
 		ce_loss_post = lossdict["ce_loss_post"]
 		losslog.write(f"{u}\t{ce_loss_pre}\t{ce_loss_post}")
 		losslog.write("\n")
 		losslog.flush()
-	
+
 	mo.write_logits(F.softmax(y, -1))
 	mo.write_bpro_hold(bpro)
 	mo.write_bimg_recon(img_b_recon)

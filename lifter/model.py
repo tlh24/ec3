@@ -45,8 +45,9 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 import pdb
+import time
 
 # ============================================================================
 # Hyperparameters  — configure here
@@ -94,6 +95,18 @@ WD_FWD = 0.01
 # Combined training
 K_INF		= 2	 # forward-inverse iteration passes
 LAMBDA_RECON = 10.0   # weight of ForwardGraphics L2 pixel reconstruction loss
+
+# Simulated-annealing schedule for the iterative soft-embedding loop.
+# Both temperature and noise std are linearly annealed from START (k=0) to END (k=K-1).
+#
+# Temperature:  > 1 broadens the softmax toward the mean embedding (wider acceptance basin);
+#               = 1 is the standard unmodified softmax.
+# Noise std:    Gaussian noise added to logits *before* the temperature-scaled softmax.
+#               At high noise the system explores the token space; at zero it greedy-descends.
+T_SOFT_START  = 4.0
+T_SOFT_END    = 1.0
+NOISE_START   = 0.05   # logit-space noise std at k=0
+NOISE_END     = 0.0   # logit-space noise std at k=K-1
 
 
 # ============================================================================
@@ -258,14 +271,21 @@ class ForwardGraphics(nn.Module):
 		"""Embed discrete token indices.  tokens: [B, N_PROG_A] int64."""
 		return self.prog_embed(tokens.long())
 
-	def embed_soft(self, logits: torch.Tensor) -> torch.Tensor: 	
+	def embed_soft(self, logits: torch.Tensor,
+				   temperature: float = 1.0,
+				   noise_std:   float = 0.0) -> torch.Tensor:
 		"""
-		Soft embedding from inverse-model logit distribution.
-		logits: [B, N_PROG_A, VOCAB]  →  [B, N_PROG_A, d_model]
-		Uses this model's own prog_embed weight matrix so the embedding space
-		is consistent regardless of where the logits came from.
+		Soft embedding from inverse-model logit distribution with optional SA noise.
+		logits:      [B, N_PROG_A, VOCAB]  →  [B, N_PROG_A, d_model]
+		temperature: > 1  broadens the softmax toward the mean embedding (wider basin)
+		             = 1  standard softmax
+		noise_std:   std of Gaussian noise added to logits before the softmax,
+		             allowing the system to escape local minima (simulated annealing).
+		             Gradients still flow through the softmax; the noise is pure exploration.
 		"""
-		return F.softmax(logits, dim=-1) @ self.prog_embed.weight
+		if noise_std > 0.0:
+			logits = logits + torch.randn_like(logits) * noise_std
+		return F.softmax(logits / temperature, dim=-1) @ self.prog_embed.weight
 
 	# -------------------------------------------------------------------------
 	def forward(self, prog_emb: torch.Tensor) -> torch.Tensor:
@@ -536,12 +556,33 @@ class CombinedModel(nn.Module):
 		fwd:		  ForwardGraphics,
 		k_inf:		int   = K_INF,
 		lambda_recon: float = LAMBDA_RECON,
+		t_soft_start: float = T_SOFT_START,
+		t_soft_end:   float = T_SOFT_END,
+		noise_start:  float = NOISE_START,
+		noise_end:    float = NOISE_END,
 	):
 		super().__init__()
 		self.inv		  = inv
 		self.fwd		  = fwd
 		self.k_inf		= k_inf
 		self.lambda_recon = lambda_recon
+		self.t_soft_start = t_soft_start
+		self.t_soft_end   = t_soft_end
+		self.noise_start  = noise_start
+		self.noise_end    = noise_end
+
+	def _soft_params(self, k: int, K: int) -> Tuple[float, float]:
+		"""
+		Returns (temperature, noise_std) linearly annealed over K steps.
+		k=0   → (t_soft_start, noise_start)   high temperature + high noise: exploration
+		k=K-1 → (t_soft_end,   noise_end)     low  temperature + low  noise: exploitation
+		"""
+		if K <= 1:
+			return self.t_soft_end, self.noise_end
+		frac  = k / (K - 1)
+		temp  = self.t_soft_start + (self.t_soft_end  - self.t_soft_start) * frac
+		noise = self.noise_start  + (self.noise_end   - self.noise_start)  * frac
+		return temp, noise
 
 	# -------------------------------------------------------------------------
 	@staticmethod
@@ -558,7 +599,8 @@ class CombinedModel(nn.Module):
 	def train_step(self,
 				   x: torch.Tensor,
 				   y: torch.Tensor,
-				   forward_only: bool) -> Tuple[torch.Tensor, Dict[str, float]]:
+				   forward_only: bool,
+				   k_inf:  Optional[int] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
 		"""
 		Joint training step.
 
@@ -572,6 +614,7 @@ class CombinedModel(nn.Module):
 		self.inv.train()
 		self.fwd.train()
 		B, dev = x.shape[0], x.device
+		K = k_inf if k_inf is not None else self.k_inf
 
 		prog_a = y[:, :N_PROG_A].long()
 		prog_b = y[:, N_PROG_A:].long()
@@ -586,12 +629,15 @@ class CombinedModel(nn.Module):
 			torch.zeros(B, N_IMG_CH, IMG_H, IMG_W, device=dev),
 		)
 
-		# (3) Iterative refinement — fully unrolled, gradients through all K passes
+		# (3) Iterative refinement — fully unrolled, gradients through all K passes.
+		# Temperature decays from t_soft_start → t_soft_end over the K steps so
+		# early passes use a broad/stable distribution and later passes tighten it.
 		if not forward_only:
-			for _ in range(self.k_inf):
-				logits	= self.inv(img_a_32, img_b_32, prog_a)	   # [B, 48, VOCAB]
-				img_b_fwd = self.fwd(self.fwd.embed_soft(logits))	  # [B, 32, H, W]
-				img_b_32  = self._compose_img32(x[:, 1], img_b_fwd)
+			for k in range(K):
+				temp, noise   = self._soft_params(k, K)
+				logits		= self.inv(img_a_32, img_b_32, prog_a)
+				img_b_fwd	 = self.fwd(self.fwd.embed_soft(logits, temp, noise))
+				img_b_32	  = self._compose_img32(x[:, 1], img_b_fwd)
 
 			# (4) Joint loss
 			ce_loss = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
@@ -635,7 +681,8 @@ class CombinedModel(nn.Module):
 	def predict(self,
 				x: torch.Tensor,
 				y: torch.Tensor,
-				k_inf:  Optional[int] = None) -> torch.Tensor:
+				k_inf:       Optional[int]      = None,
+				report_fun:  Optional[Callable] = None) -> torch.Tensor:
 		"""
 		Iterative inference — no ground-truth prog_b required.
 
@@ -665,10 +712,14 @@ class CombinedModel(nn.Module):
 		logits = self.inv(img_a_32, img_b_32, prog_a)
 		ce_loss_pre = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
 
-		for _ in range(K):
-			img_b_recon = self.fwd(self.fwd.embed_soft(logits))
-			img_b_32  = self._compose_img32(x[:, 1], img_b_recon)
-			logits	= self.inv(img_a_32, img_b_32, prog_a)
+		for k in range(K):
+			temp, noise = self._soft_params(k, K)
+			img_b_recon = self.fwd(self.fwd.embed_soft(logits, temp, noise))
+			img_b_32	= self._compose_img32(x[:, 1], img_b_recon)
+			logits	  = self.inv(img_a_32, img_b_32, prog_a)
+			if report_fun is not None:
+				report_fun(logits, img_b_recon[:, 0].detach())
+			time.sleep(0.25)
 
 		ce_loss_post = F.cross_entropy(logits.reshape(-1, VOCAB), prog_b.reshape(-1))
 		return logits, img_b_recon[:,0].detach(), {'ce_loss_pre': ce_loss_pre.item(), 'ce_loss_post': ce_loss_post.item()}
@@ -747,7 +798,7 @@ if __name__ == '__main__':
 
 	combined = CombinedModel(inv, fwd)
 
-	logits_c, img_b_recon_c, losses_c = combined.train_step(x, y)
+	logits_c, img_b_recon_c, losses_c = combined.train_step(x, y, forward_only=False)
 	assert logits_c.shape == (B, N_PROG_B, VOCAB)
 	assert img_b_recon_c.shape == (B, IMG_H, IMG_W)
 	print(f"  img_b_recon shape:    {tuple(img_b_recon_c.shape)}  OK")
@@ -756,8 +807,10 @@ if __name__ == '__main__':
 	print(f"  recon_loss:		   {losses_c['recon_loss']:.4f}")
 	print(f"  total_loss:		   {losses_c['total_loss']:.4f}")
 
-	prog_a_inf = y[:, :N_PROG_A]
-	logits_inf = combined.predict(x, prog_a_inf)
+	logits_c2, img_b_recon_c2, losses_c2 = combined.train_step(x, y, forward_only=True)
+	print(f"  forward_only recon:   {losses_c2['recon_loss']:.4f}  OK")
+
+	logits_inf, img_b_recon_inf, _ = combined.predict(x, y)
 	assert logits_inf.shape == (B, N_PROG_B, VOCAB)
 	print(f"  predict logits:	   {tuple(logits_inf.shape)}  OK")
 
