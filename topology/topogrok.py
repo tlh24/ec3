@@ -137,7 +137,7 @@ def run_experiment():
         device = torch.device("cpu")
         
     print(f"Using device: {device}")
-    epochs = 1500
+    epochs = 2500
     
     print("Training Standard MLP (Waiting for Grokking...)")
     std_model, std_hist = train_model(epochs=epochs, use_topo_loss=False, device=device)
