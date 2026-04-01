@@ -57,7 +57,7 @@ def unpermute_spectral(C_table, n=19):
 	"""Recovers the ordering for A, B, and C purely from observation."""
 
 	# --- 1. Un-permute B ---
-	# Pick two random A labels to act as our shift operators
+	# Pick two random A labels to act as our shift operators = generator
 	a0, a1 = 0, 1
 	P_a0 = np.zeros((n, n))
 	P_a1 = np.zeros((n, n))
@@ -71,9 +71,12 @@ def unpermute_spectral(C_table, n=19):
 	# Because n=19 is prime, ANY shift generates the full cycle.
 	W_B = P_a0 @ P_a1.T
 	# transpose is the inverse map c1 -> b given a1
-	# this traces a path b -> c -> b
-	# which is only true if the forward and inverse maps share the same delta
-	W_B = W_B + W_B.T # Make it undirected/symmetric
+	# @ traces a path b -> c -> b'
+	# algebraically, a0 + b = c ; a1 + b' = c
+	# then a0 - a1 = delta = b - b'
+	# so W_B is 1 only where (b - b') mod n = delta (a const)
+	# this defines neighbors in terms of one generator "delta". 
+	W_B = W_B + W_B.T # Make W_B undirected/symmetric
 	order_B = extract_topology(W_B)
 
 	# --- 2. Un-permute A ---
@@ -101,6 +104,7 @@ def unpermute_aligned(C_table, n=19):
 	"""Recovers and ALIGNS the orderings so A, B, and C share the same generator."""
 
 	# 1. Extract a topology for B using two arbitrary A operators
+	# (see more detailed comments above)
 	a0, a1 = 0, 1
 	P_a0, P_a1 = np.zeros((n, n)), np.zeros((n, n))
 	for b_label in range(n):
@@ -109,12 +113,12 @@ def unpermute_aligned(C_table, n=19):
 
 	W_B = P_a0 @ P_a1.T
 	W_B = W_B + W_B.T
-	order_B = extract_topology(W_B) # B is now ordered by SOME step size delta.
+	order_B = extract_topology(W_B) # B is now ordered by step size delta.
 
 	# 2. ANCHOR C TO B
 	# Pick an arbitrary row (e.g., the label 0).
 	# If we pass our sorted B through this row, it produces a sequence of C labels.
-	# By DEFINITION, this sequence shares the exact same delta step as B!
+	# By definition, this sequence shares the exact same delta as B!
 	anchor_a = 0
 	order_C = [C_table[anchor_a, b] for b in order_B]
 
