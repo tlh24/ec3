@@ -46,6 +46,7 @@ def extract_topology(W):
 	# a 2D space. Because the graph is a cycle, this embedding is a perfect circle!
 	x = evecs[:, 1]
 	y = evecs[:, 2]
+	plt.scatter(x, y, 5, 'blue')
 
 	# 3. Read the order of elements around the circle
 	angles = np.arctan2(y, x)
