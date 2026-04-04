@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+import pdb
 
 # ==========================================
 # 1. Network Definition
@@ -66,9 +67,11 @@ def compute_analytical_laplacian(E_A, E_B, W_out, batch_a, batch_b):
 	return L, E_joint
 
 def compute_analytical_agop(E_A, E_B, W_out, batch_a, batch_b):
+	# this function treats the network as v -> x^2 -> W_out
+	# so the jacobian is 2v
 	# 1. Forward Pass
 	v = E_A[batch_a] + E_B[batch_b]
-	g = 2 * v
+	g = 2 * v # derivative of v^2 nonlinearity
 
 	# 2. Compute true Covariance of the gradients
 	# Var(X) = E[X*X^T] - E[X]*E[X]^T
@@ -78,7 +81,11 @@ def compute_analytical_agop(E_A, E_B, W_out, batch_a, batch_b):
 
 	# 3. Exact Centered Jacobian Outer Product
 	W_T_W = W_out.t() @ W_out
-	M_centered = W_T_W * V_cov
+	M_centered = W_T_W * V_cov # project V_cov to output space
+	# Note Hadamard product - because the partial deriv is local
+	# M_centered is hence the AGOP matrix of partial output / partial input
+	# where input is considered v above, not batch_a and batch_b
+	# outer product hence d x d
 
 	# 4. Project to Token Space
 	E_joint = torch.cat([E_A, E_B], dim=0)
@@ -103,7 +110,7 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 	dataset = torch.tensor(dataset, dtype=torch.long)
 	labels = torch.tensor(labels, dtype=torch.long)
 
-	torch.manual_seed(42)
+	# torch.manual_seed(42)
 	indices = torch.randperm(p * p)
 	split_idx = int(0.75 * p * p)
 	train_idx, val_idx = indices[:split_idx], indices[split_idx:]
@@ -114,7 +121,7 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 	model = GrokkingMLP(p, d).to(device)
 
 	# Standard Weight Decay acts as the isotropic contraction
-	optimizer = optim.AdamW(model.parameters(), lr=5e-3, weight_decay=1e-2)
+	optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
 	criterion = nn.CrossEntropyLoss()
 
 	history = {'train_loss':[], 'val_loss':[], 'val_acc':[]}
