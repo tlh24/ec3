@@ -149,7 +149,7 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 
 		if use_agop_loss:
 			topo_loss = compute_agop_transformer(model, train_data)
-			loss = loss + (1.0 / (2 * p * d)) * topo_loss
+			loss = loss + (0.5 / (2 * p * d)) * topo_loss
 
 		loss.backward()
 		optimizer.step()
@@ -174,7 +174,7 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 def run_experiment():
 	device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
 	print(f"Using device: {device}")
-	epochs = 400
+	epochs = 300
 
 	print("Training Standard Transformer...")
 	std_model, std_hist = train_model(epochs=epochs, use_agop_loss=False, device=device)
