@@ -4,7 +4,8 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.func import vmap, jacrev
-from rotary_embedding_torch import RotaryEmbedding
+
+USE_NORM = False
 
 # ==========================================
 # 1. Network Definition
@@ -19,7 +20,8 @@ class GrokkingTransformer(nn.Module):
 		self.embed = nn.Embedding(p + 1, d)
 		nn.init.normal_(self.embed.weight, std=0.02)
 
-		self.rotary_emb = RotaryEmbedding(dim=d)
+		self.pos_emb = nn.Embedding(3, d)
+		nn.init.normal_(self.pos_emb.weight, std=0.02)
 
 		# 1-layer, 1-head attention
 		self.W_q = nn.Linear(d, d, bias=False)
@@ -27,8 +29,8 @@ class GrokkingTransformer(nn.Module):
 		self.W_v = nn.Linear(d, d, bias=False)
 		self.W_o = nn.Linear(d, d, bias=False)
 
-		self.ln1 = nn.LayerNorm(d)
-		self.ln2 = nn.LayerNorm(d)
+		self.ln1 = nn.LayerNorm(d) if USE_NORM else nn.Identity()
+		self.ln2 = nn.LayerNorm(d) if USE_NORM else nn.Identity()
 
 		# Quadratic MLP (highly favored for grokking modular arithmetic phases)
 		self.mlp_w1 = nn.Linear(d, 4 * d, bias=False)
@@ -48,13 +50,13 @@ class GrokkingTransformer(nn.Module):
 		if not is_batched: e = e.unsqueeze(0)
 
 		B, seq_len, d = e.shape
-		x_norm = self.ln1(e)
-
-		q, k, v = self.W_q(x_norm), self.W_k(x_norm), self.W_v(x_norm)
 
 		# Inject Position Information
-		q = self.rotary_emb.rotate_queries_or_keys(q)
-		k = self.rotary_emb.rotate_queries_or_keys(k)
+		positions = torch.arange(seq_len, device=e.device)
+		e = e + self.pos_emb(positions)
+
+		x_norm = self.ln1(e)
+		q, k, v = self.W_q(x_norm), self.W_k(x_norm), self.W_v(x_norm)
 
 		scores = torch.bmm(q, k.transpose(1, 2)) / np.sqrt(d)
 
