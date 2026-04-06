@@ -87,12 +87,11 @@ def compute_analytical_agop(E_A, E_B, W_out, batch_a, batch_b):
 	# where input is considered v above, not batch_a and batch_b
 	# outer product hence d x d
 
-	# 4. Project to Token Space
+	# 4. Project to Token Space = full Jacobian.
 	E_joint = torch.cat([E_A, E_B], dim=0)
 	G_cov = E_joint @ M_centered @ E_joint.t()
 
 	# 5. The Paper's Exact Regularizer: Trace of the AGOP
-	# We do not use D - W. We just return the trace!
 	agop_trace_penalty = torch.trace(G_cov)
 
 	return agop_trace_penalty
