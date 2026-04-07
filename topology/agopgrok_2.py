@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.func import vmap, jacrev
+import pdb
 
 USE_NORM = False
 
@@ -11,10 +12,13 @@ USE_NORM = False
 # 1. Network Definition
 # ==========================================
 class GrokkingTransformer(nn.Module):
-	def __init__(self, p, d):
+	def __init__(self, p, d, n_heads=1):
 		super().__init__()
+		assert d % n_heads == 0, "d must be divisible by n_heads"
 		self.p = p
 		self.d = d
+		self.n_heads = n_heads
+		self.head_dim = d // n_heads
 
 		# Vocab: 0 to p-1 are standard numbers. Token `p` is the special '=' token.
 		self.embed = nn.Embedding(p + 1, d)
@@ -23,7 +27,7 @@ class GrokkingTransformer(nn.Module):
 		self.pos_emb = nn.Embedding(3, d)
 		nn.init.normal_(self.pos_emb.weight, std=0.02)
 
-		# 1-layer, 1-head attention
+		# Multi-head attention projections
 		self.W_q = nn.Linear(d, d, bias=False)
 		self.W_k = nn.Linear(d, d, bias=False)
 		self.W_v = nn.Linear(d, d, bias=False)
@@ -33,10 +37,10 @@ class GrokkingTransformer(nn.Module):
 		self.ln2 = nn.LayerNorm(d) if USE_NORM else nn.Identity()
 
 		# Quadratic MLP (highly favored for grokking modular arithmetic phases)
-		self.mlp_w1 = nn.Linear(d, 4 * d, bias=False)
-		self.mlp_w2 = nn.Linear(4 * d, d, bias=False)
+		self.mlp_w1 = nn.Linear(d, 4 * d, bias=True)
+		self.mlp_w2 = nn.Linear(4 * d, d, bias=True)
 
-		self.W_out = nn.Linear(d, p, bias=False)
+		self.W_out = nn.Linear(d, p, bias=True)
 		nn.init.normal_(self.W_out.weight, std=1.0 / np.sqrt(d))
 
 	def forward(self, x):
@@ -46,6 +50,7 @@ class GrokkingTransformer(nn.Module):
 
 	def forward_from_embeddings(self, e):
 		# Unroll logic allows torch.func.vmap to run over the sequence
+		# pdb.set_trace()
 		is_batched = e.dim() == 3
 		if not is_batched: e = e.unsqueeze(0)
 
@@ -58,19 +63,34 @@ class GrokkingTransformer(nn.Module):
 		x_norm = self.ln1(e)
 		q, k, v = self.W_q(x_norm), self.W_k(x_norm), self.W_v(x_norm)
 
-		scores = torch.bmm(q, k.transpose(1, 2)) / np.sqrt(d)
+		# Split into heads: (B, seq, d) -> (B*n_heads, seq, head_dim)
+		def split_heads(t):
+			return t.view(B, seq_len, self.n_heads, self.head_dim).transpose(1, 2).reshape(B * self.n_heads, seq_len, self.head_dim)
 
-		# Standard causal mask for standard autoregressive emulation
-		mask = torch.tril(torch.ones(3, 3, device=e.device)).unsqueeze(0)
+		q, k, v = split_heads(q), split_heads(k), split_heads(v)
+
+		scores = torch.bmm(q, k.transpose(1, 2)) / np.sqrt(self.head_dim)
+
+		# Standard causal mask for autoregressive emulation
+		# not strictly required..
+		mask = torch.tril(torch.ones(seq_len, seq_len, device=e.device)).unsqueeze(0)
 		scores = scores.masked_fill(mask == 0, float('-inf'))
 		attn = torch.softmax(scores, dim=-1)
+		# # Manually create the perfect attention map for the '=' token (pos 2)
+		# # It attends equally to pos 0 (a) and pos 1 (b)
+		# attn = torch.zeros(B, 3, 3, device=e.device)
+		# attn[:, 2, 0] = 0.5
+		# attn[:, 2, 1] = 0.5
+		# attn[:, 2, 2] = 0.0
 
-		context = self.W_o(torch.bmm(attn, v))
+		# Merge heads back: (B*n_heads, seq, head_dim) -> (B, seq, d)
+		context = torch.bmm(attn, v).view(B, self.n_heads, seq_len, self.head_dim).transpose(1, 2).reshape(B, seq_len, d)
+		# context = self.W_o(context) # redundant
 		h = e + context
 
 		# Pre-LN Quadratic MLP
-		h_norm = self.ln2(h)
-		mlp_out = self.mlp_w2((self.mlp_w1(h_norm)) ** 2)
+		h_norm = self.ln2(context)
+		mlp_out = self.mlp_w2(nn.functional.relu(self.mlp_w1(h_norm)) )
 		h = h + mlp_out
 
 		# We only predict from the last token '=' (position index 2)
@@ -127,7 +147,7 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 	dataset, labels = torch.tensor(dataset, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
 
 	indices = torch.randperm(p * p)
-	split_idx = int(0.75 * p * p)
+	split_idx = int(0.6 * p * p)
 	train_idx, val_idx = indices[:split_idx], indices[split_idx:]
 
 	train_data, val_data = dataset[train_idx].to(device), dataset[val_idx].to(device)
@@ -174,24 +194,39 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 def run_experiment():
 	device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
 	print(f"Using device: {device}")
-	epochs = 300
+	epochs = 800
 
 	print("Training Standard Transformer...")
-	std_model, std_hist = train_model(epochs=epochs, use_agop_loss=False, device=device)
+	std_model, std_hist = train_model(epochs=epochs*4, use_agop_loss=False, device=device)
 
 	print("Training Analytical AGOP-Assisted Transformer...")
 	topo_model, topo_hist = train_model(epochs=epochs, use_agop_loss=True, device=device)
 
 	# Plot 1: Curves
-	fig1 = plt.figure(figsize=(8, 5))
 	epochs_x = np.arange(0, epochs, 10)
-	plt.plot(epochs_x, std_hist['val_acc'], label='Standard Transformer', color='red', alpha=0.7)
-	plt.plot(epochs_x, topo_hist['val_acc'], label='Analytical AGOP Topo', color='blue', linewidth=2)
-	plt.title("Validation Accuracy")
-	plt.xlabel("Epochs")
-	plt.ylabel("Accuracy")
-	plt.legend()
-	plt.grid(True, alpha=0.3)
+	epochs_x4 = np.arange(0, epochs*4, 10)
+
+	fig1, (ax_acc, ax_loss) = plt.subplots(1, 2, figsize=(14, 5))
+
+	ax_acc.plot(epochs_x4, std_hist['val_acc'], label='Standard Transformer', color='red')
+	ax_acc.plot(epochs_x, topo_hist['val_acc'], label='Analytical AGOP Topo', color='blue', linewidth=2)
+	ax_acc.set_title("Validation Accuracy")
+	ax_acc.set_xlabel("Epochs")
+	ax_acc.set_ylabel("Accuracy")
+	ax_acc.legend()
+	ax_acc.grid(True, alpha=0.3)
+
+	ax_loss.plot(epochs_x4, std_hist['train_loss'], label='Standard Train', color='salmon', linestyle='--')
+	ax_loss.plot(epochs_x4, std_hist['val_loss'], label='Standard Val', color='red')
+	ax_loss.plot(epochs_x, topo_hist['train_loss'], label='AGOP Train', color='cornflowerblue', linestyle='--')
+	ax_loss.plot(epochs_x, topo_hist['val_loss'], label='AGOP Val', color='blue', linewidth=2)
+	ax_loss.set_title("Loss")
+	ax_loss.set_xlabel("Epochs")
+	ax_loss.set_ylabel("Loss")
+	ax_loss.legend()
+	ax_loss.grid(True, alpha=0.3)
+
+	plt.tight_layout()
 	plt.show()
 
 	# Plot 2: Visualizing Structure
