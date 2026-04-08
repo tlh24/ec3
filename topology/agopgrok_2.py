@@ -7,6 +7,7 @@ from torch.func import vmap, jacrev
 import pdb
 
 USE_NORM = False
+BATCH_SIZE = 128
 
 # ==========================================
 # 1. Network Definition
@@ -137,7 +138,7 @@ def compute_agop_transformer(model, batch_data):
 # ==========================================
 # 3. Training Loop
 # ==========================================
-def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
+def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu', batch_size=None):
 	dataset, labels = [], []
 	for a in range(p):
 		for b in range(p):
@@ -153,6 +154,14 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 	train_data, val_data = dataset[train_idx].to(device), dataset[val_idx].to(device)
 	train_labels, val_labels = labels[train_idx].to(device), labels[val_idx].to(device)
 
+	n_train = train_data.shape[0]
+	use_minibatch = batch_size is not None and batch_size < n_train
+
+	# steps_per_epoch: gradient steps per effective epoch (full-dataset pass equivalent)
+	steps_per_epoch = n_train // batch_size if use_minibatch else 1
+	total_steps = epochs * steps_per_epoch
+	log_every = 10 * steps_per_epoch  # log every 10 effective epochs
+
 	model = GrokkingTransformer(p, d).to(device)
 
 	# 1e-3 LR is usually safer than 1e-2 for Transformers
@@ -160,21 +169,29 @@ def train_model(p=59, d=128, epochs=1000, use_agop_loss=False, device='cpu'):
 	criterion = nn.CrossEntropyLoss()
 	history = {'train_loss':[], 'val_loss':[], 'val_acc':[]}
 
-	for epoch in range(epochs):
+	for step in range(total_steps):
 		model.train()
 		optimizer.zero_grad()
 
-		logits = model(train_data)
-		loss = criterion(logits, train_labels)
+		if use_minibatch:
+			mb_idx = torch.randperm(n_train, device=device)[:batch_size]
+			batch_data = train_data[mb_idx]
+			batch_labels = train_labels[mb_idx]
+		else:
+			batch_data = train_data
+			batch_labels = train_labels
+
+		logits = model(batch_data)
+		loss = criterion(logits, batch_labels)
 
 		if use_agop_loss:
-			topo_loss = compute_agop_transformer(model, train_data)
+			topo_loss = compute_agop_transformer(model, batch_data)
 			loss = loss + (0.5 / (2 * p * d)) * topo_loss
 
 		loss.backward()
 		optimizer.step()
 
-		if epoch % 10 == 0:
+		if step % log_every == 0:
 			model.eval()
 			with torch.no_grad():
 				val_logits = model(val_data)
@@ -197,21 +214,21 @@ def run_experiment():
 	epochs = 500
 
 	print("Training Standard Transformer...")
-	std_model, std_hist = train_model(epochs=epochs*4, use_agop_loss=False, device=device)
+	std_model, std_hist = train_model(epochs=epochs, use_agop_loss=False, device=device, batch_size=BATCH_SIZE)
 
 	print("Training Analytical AGOP-Assisted Transformer...")
-	topo_model, topo_hist = train_model(epochs=epochs, use_agop_loss=True, device=device)
+	topo_model, topo_hist = train_model(epochs=epochs, use_agop_loss=True, device=device, batch_size=BATCH_SIZE)
 
 	# Plot 1: Curves
 	epochs_x = np.arange(0, epochs, 10)
-	epochs_x4 = np.arange(0, epochs*4, 10)
+	epochs_x4 = np.arange(0, epochs*4, 10) # this is a second variable b/c the vanilla transformer takes longer to train
 
 	fig1, (ax_acc, ax_loss) = plt.subplots(1, 2, figsize=(14, 5))
 
 	ax_acc.plot(epochs_x4, std_hist['val_acc'], label='Standard Transformer', color='red')
 	ax_acc.plot(epochs_x, topo_hist['val_acc'], label='Analytical AGOP Topo', color='blue', linewidth=2)
 	ax_acc.set_title("Validation Accuracy")
-	ax_acc.set_xlabel("Epochs")
+	ax_acc.set_xlabel("Effective Epochs")
 	ax_acc.set_ylabel("Accuracy")
 	ax_acc.legend()
 	ax_acc.grid(True, alpha=0.3)
@@ -221,7 +238,7 @@ def run_experiment():
 	ax_loss.plot(epochs_x, topo_hist['train_loss'], label='AGOP Train', color='cornflowerblue', linestyle='--')
 	ax_loss.plot(epochs_x, topo_hist['val_loss'], label='AGOP Val', color='blue', linewidth=2)
 	ax_loss.set_title("Loss")
-	ax_loss.set_xlabel("Epochs")
+	ax_loss.set_xlabel("Effective Epochs")
 	ax_loss.set_ylabel("Loss")
 	ax_loss.legend()
 	ax_loss.grid(True, alpha=0.3)
