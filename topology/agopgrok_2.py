@@ -214,7 +214,7 @@ def run_experiment():
 	epochs = 500
 
 	print("Training Standard Transformer...")
-	std_model, std_hist = train_model(epochs=epochs, use_agop_loss=False, device=device, batch_size=BATCH_SIZE)
+	std_model, std_hist = train_model(epochs=epochs*4, use_agop_loss=False, device=device, batch_size=BATCH_SIZE)
 
 	print("Training Analytical AGOP-Assisted Transformer...")
 	topo_model, topo_hist = train_model(epochs=epochs, use_agop_loss=True, device=device, batch_size=BATCH_SIZE)
