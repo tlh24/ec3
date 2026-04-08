@@ -177,7 +177,7 @@ def run_experiment():
 	elif torch.backends.mps.is_available(): device = torch.device("mps")
 	else: device = torch.device("cpu")
 	print(f"Using device: {device}")
-	epochs = 500
+	epochs = 2500
 
 	print("Training Standard MLP...")
 	std_model, std_hist = train_model(epochs=epochs, use_agop_loss=False, device=device)
