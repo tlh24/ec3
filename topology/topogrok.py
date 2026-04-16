@@ -196,10 +196,10 @@ def run_experiment():
 		return sc_A
 
 	ax2 = plt.subplot(1, 3, 2)
-	plot_pca_joint(std_model, ax2, "Standard MLP Embeddings\n(A and B misaligned / knotted)")
+	plot_pca_joint(std_model, ax2, "Standard MLP Embeddings")
 
 	ax3 = plt.subplot(1, 3, 3)
-	sc3 = plot_pca_joint(topo_model, ax3, "Bipartite Topo MLP Embeddings\n(A and B perfectly locked together!)")
+	sc3 = plot_pca_joint(topo_model, ax3, "Bipartite Topo MLP Embeddings)")
 
 	# Add a single colorbar for reference
 	cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
